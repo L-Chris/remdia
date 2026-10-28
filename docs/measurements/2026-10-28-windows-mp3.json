@@ -1,0 +1,46 @@
+{
+  "runner": "windows-2025",
+  "sdk_commit": "87b4a15f7bf6c98ba4ab08725075fc6b7e8ed947",
+  "run": "https://github.com/L-Chris/remdia/actions/runs/40784141822",
+  "capabilities": {
+    "decode": [
+      "aac",
+      "mp3",
+      "flac",
+      "alac",
+      "opus",
+      "pcm_u8",
+      "pcm_s16le",
+      "pcm_s24le",
+      "pcm_s32le",
+      "pcm_f32le"
+    ],
+    "mp3_encode": true,
+    "mp3_gapless": false,
+    "mp3_input_rates": [
+      16000,
+      22050,
+      24000,
+      32000,
+      44100,
+      48000
+    ],
+    "resample": true
+  },
+  "roundtrips": [
+    {
+      "rate": 16000,
+      "input_samples": 32000,
+      "decoded_samples": 33456,
+      "difference_samples": 1456,
+      "difference_ms": 91.0
+    },
+    {
+      "rate": 32000,
+      "input_samples": 64000,
+      "decoded_samples": 66288,
+      "difference_samples": 2288,
+      "difference_ms": 71.5
+    }
+  ]
+}

@@ -61,6 +61,8 @@ Windows x64：Rust、Visual Studio C++ Build Tools、Python 3；TLS 依赖的部
 
 显式图示例保留兼容 demux，以演示跨能力包组合；默认 facade 优先系统 demux。文件 sink 不覆盖已有目标；WAV mux 在 drain 后修正 RIFF 头。MP3 packet copy/mux 不承诺保留原始 ID3/Xing；gapless 编码请求生成新的延迟/填充标签。Windows 的 `windows.mp3.encode` 是独立的系统原始 MP3 工厂，支持的输入档位以能力查询为准。
 
+Windows 已实测系统 MP3 encoder 的 16 kHz 编码可用；当前缺的是 SDK 系统路径的 gapless 首尾信息与封装适配。macOS 默认公开接口没有 MP3 encoder。[能力边界与实际回读数据](docs/system-mp3-encoding.md)区分这两个保留 LAME 的原因。
+
 ## Rust SDK
 
 ```rust,no_run
