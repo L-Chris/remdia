@@ -545,3 +545,99 @@ fn windows_optional_system_opus_or_explicit_absence() {
 fn windows_optional_system_vorbis_or_explicit_absence() {
     windows_decode_fixture("audio-vorbis.ogg", 132352);
 }
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio and native mux plugins"]
+fn windows_gapless_mp3_preserves_count_and_signal_alignment_without_lame() {
+    let mut engine = engine();
+    engine
+        .registry
+        .candidates
+        .retain(|c| c.manifest.id != "fallback_mp3_lame" && c.manifest.id != "fallback_vorbis");
+    let root =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/system-tests");
+    std::fs::create_dir_all(&root).unwrap();
+    for count in [1, 31, 575, 576, 577, 1024, 17968, 32000, 32001, 120 * 16000] {
+        let mut state = 0x817a593bu32;
+        let mut filter = 0f32;
+        let signal = (0..count)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                filter = filter * 0.65 + ((state as f64 / u32::MAX as f64 * 2. - 1.) as f32) * 0.35;
+                filter * 0.6
+            })
+            .collect::<Vec<_>>();
+        let encoded = engine
+            .encode_mp3_with_policy(&signal, crate::ProviderPolicy::SystemOnly)
+            .unwrap();
+        let file = root.join(format!("windows-gapless-{count}.mp3"));
+        std::fs::write(&file, encoded.bytes()).unwrap();
+        if count <= 32001 {
+            std::fs::write(
+                root.join(format!("windows-gapless-{count}.f32")),
+                signal
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+        let mut request = crate::Request::playback(file.to_str().unwrap());
+        request.task = crate::Task::Audio;
+        request.audio_rate = 16000;
+        request.audio_channels = 1;
+        request.policy = crate::ProviderPolicy::SystemOnly;
+        let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
+        assert_eq!(
+            session.info().duration_us,
+            Some(count as i64 * 1_000_000 / 16000)
+        );
+        let mut pcm = Vec::new();
+        while let Some(frame) = session.read().unwrap() {
+            assert!(frame.info().pts_us().unwrap() >= 0);
+            pcm.extend(
+                frame
+                    .bytes()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|v| f32::from_le_bytes(*v)),
+            );
+        }
+        assert_eq!(pcm.len(), count, "gapless valid samples for {count}");
+        if count >= 17968 {
+            let end = count.min(32768) - 512;
+            let reference = &signal[512..end];
+            let energy = reference.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+            let mut scores = Vec::new();
+            for lag in -16i32..=16 {
+                let start = (512i32 + lag) as usize;
+                let candidate = &pcm[start..start + reference.len()];
+                let dot = reference
+                    .iter()
+                    .zip(candidate)
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum::<f64>();
+                let power = candidate.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                scores.push((lag, dot / (energy * power).sqrt()));
+            }
+            let (lag, score) = scores
+                .into_iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap();
+            eprintln!(
+                "WINDOWS_GAPLESS samples={count} decoded={} lag={lag} correlation={score}",
+                pcm.len()
+            );
+            assert!(
+                lag.abs() <= 1 && score > 0.85,
+                "incorrect gapless alignment"
+            );
+            let tail = pcm[count - 256..].iter().map(|v| v * v).sum::<f32>();
+            assert!(tail > 0.01, "lost the final signal");
+        }
+    }
+}

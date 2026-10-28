@@ -4,7 +4,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     time::{Duration, Instant},
 };
-use symphonia::core::io::MediaSource;
+use symphonia_core::io::MediaSource;
 
 struct Local {
     file: std::fs::File,

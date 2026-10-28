@@ -19,6 +19,8 @@ mod windows_audio;
 #[cfg(windows)]
 mod windows_encode;
 #[cfg(windows)]
+mod windows_gapless;
+#[cfg(windows)]
 mod windows_resample;
 use anyhow::Result;
 use remdia_graph::*;
@@ -56,7 +58,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
 }
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     if config.component == format!("{}.audio.capabilities", std::env::consts::OS) {
-        return Ok(Box::new(capabilities::Capabilities::new(config)?));
+        return Ok(Box::new(capabilities::Capabilities::new(config, control)?));
     }
     let _ = control;
     #[cfg(target_os = "macos")]

@@ -74,18 +74,12 @@ impl Plan {
                     let available = audio_caps["decode"]
                         .as_array()
                         .is_some_and(|list| list.iter().any(|codec| codec == &track.codec));
-                    if available {
-                        format!("{}.audio.decode", std::env::consts::OS)
-                    } else {
-                        ensure!(
-                            request.policy != ProviderPolicy::SystemOnly
-                                && cfg!(windows)
-                                && track.codec == "vorbis",
-                            "system audio decoder unavailable for {}; no permitted compatibility decoder",
-                            track.codec
-                        );
-                        format!("fallback.{}.decode", track.codec)
-                    }
+                    ensure!(
+                        available,
+                        "system audio decoder unavailable for {}; software decoding is not enabled",
+                        track.codec
+                    );
+                    format!("{}.audio.decode", std::env::consts::OS)
                 };
                 nodes.push(NodeSpec {id:id.clone(),config:NodeConfig {component,settings:json!({"track":track,"max_frame_bytes":request.max_frame_bytes,"hardware":request.hardware})}});
                 edges.push(EdgeSpec::between(

@@ -1030,7 +1030,16 @@ dependencies = [
  "remdia-plugin-abi",
  "reqwest",
  "serde_json",
- "symphonia",
+ "symphonia-bundle-flac",
+ "symphonia-bundle-mp3",
+ "symphonia-codec-aac",
+ "symphonia-core",
+ "symphonia-format-caf",
+ "symphonia-format-isomp4",
+ "symphonia-format-mkv",
+ "symphonia-format-ogg",
+ "symphonia-format-riff",
+ "symphonia-metadata",
 ]
 
 [[package]]
@@ -1042,19 +1051,6 @@ dependencies = [
  "remdia-graph",
  "remdia-plugin-abi",
  "serde_json",
-]
-
-[[package]]
-name = "remdia-backend-fallback-vorbis"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "remdia-graph",
- "remdia-plugin-abi",
- "serde",
- "serde_json",
- "symphonia-codec-vorbis",
- "symphonia-core",
 ]
 
 [[package]]
@@ -1087,6 +1083,7 @@ name = "remdia-backend-native"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "remdia-bitstream",
  "remdia-graph",
  "remdia-plugin-abi",
  "serde_json",
@@ -1532,25 +1529,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
-name = "symphonia"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7edef6a96b696d4e0cab5ee9ebb7ca155ed95f30a6b45bbb8b97d2727f02424"
-dependencies = [
- "lazy_static",
- "symphonia-bundle-flac",
- "symphonia-bundle-mp3",
- "symphonia-codec-aac",
- "symphonia-core",
- "symphonia-format-caf",
- "symphonia-format-isomp4",
- "symphonia-format-mkv",
- "symphonia-format-ogg",
- "symphonia-format-riff",
- "symphonia-metadata",
-]
-
-[[package]]
 name = "symphonia-bundle-flac"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1580,17 +1558,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5bf8e39552d34a3c4c98333370e62f48c92456d2e814f273b5c3ad7c4a5f45c"
 dependencies = [
  "lazy_static",
- "log",
- "symphonia-common",
- "symphonia-core",
-]
-
-[[package]]
-name = "symphonia-codec-vorbis"
-version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73d90b4fcf796137cc683c538282804ff9629f8ad9dbfd881fcbba331ac4e986"
-dependencies = [
  "log",
  "symphonia-common",
  "symphonia-core",

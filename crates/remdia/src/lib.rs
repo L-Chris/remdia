@@ -285,12 +285,12 @@ fn encode_pcm_mp3(
         "windows.mp3.encode"
     } else {
         ensure!(
-            policy != ProviderPolicy::SystemOnly,
-            "system MP3 encoder does not support the 16-kHz gapless request profile"
+            cfg!(target_os = "macos") && policy != ProviderPolicy::SystemOnly,
+            "system MP3 encoder does not support the 16-kHz gapless request profile; no software encoder is enabled on this platform"
         );
         "fallback.mp3.encode"
     };
-    let spec = GraphSpec {
+    let mut spec = GraphSpec {
         nodes: vec![
             NodeSpec {
                 id: "input".into(),
@@ -309,6 +309,17 @@ fn encode_pcm_mp3(
         ],
         edges: vec![EdgeSpec::between("input", "encode", None)],
     };
+    if available {
+        let delay = caps["mp3_encoder_delay_samples"]
+            .as_u64()
+            .context("missing system MP3 encoder delay")?;
+        spec.nodes.push(NodeSpec {id:"gapless_mux".into(),config:NodeConfig {
+            component:"native.mp3.gapless_mux".into(),
+            settings:json!({"rate":16000,"channels":1,"valid_samples":samples.len(),"encoder_delay":delay}),
+        }});
+        spec.edges
+            .push(EdgeSpec::between("encode", "gapless_mux", None));
+    }
     let mut header = BufferHeader {
         stream_id: 0,
         generation,
@@ -328,10 +339,29 @@ fn encode_pcm_mp3(
     // the requesting session's generation after byte assembly.
     let mut input = input;
     input.header.generation = 1;
+    let mut inputs = vec![input];
+    if available {
+        // Flush the final filterbank overlap even for a one-sample request.
+        // The independent mux excludes these guard samples from valid duration.
+        inputs.push(MediaBuffer::new(
+            BufferHeader {
+                stream_id: 0,
+                generation: 1,
+                info: FrameInfo::Audio {
+                    pts_us: (samples.len() as u64 * 1_000_000 / 16000) as i64,
+                    rate: 16000,
+                    channels: 1,
+                    samples: 1152,
+                    format: "f32le".into(),
+                },
+            },
+            vec![vec![0; 1152 * 4]],
+        ));
+    }
     let mut graph = jobs::bound_graph(
         &engine,
         &spec,
-        std::collections::BTreeMap::from([("input".into(), vec![input])]),
+        std::collections::BTreeMap::from([("input".into(), inputs)]),
         cancel,
     )?;
     let reservation = budget.reserve(16 * 1024 * 1024)?;

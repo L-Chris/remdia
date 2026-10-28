@@ -84,6 +84,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package decode failed' }
           & "$stage/remdia.exe" extract $media "$stage/audio.mp3" --duration-us 1000000
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package MP3 failed' }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-gapless-certification
+          path: target/system-tests/windows-gapless-*
+          if-no-files-found: warn
       - name: Download FLAC linear-seek baseline (5bba7ce)
         if: github.event_name == 'workflow_dispatch' && inputs.flac_baseline_run != ''
         uses: actions/download-artifact@v4

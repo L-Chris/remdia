@@ -1,10 +1,10 @@
 //! MP3 encoding fallback for system encoder/profile gaps.
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
 mod encode;
 use anyhow::Result;
 use remdia_graph::*;
 fn descriptors() -> Vec<ComponentDescriptor> {
-    if !cfg!(any(windows, target_os = "macos")) {
+    if !cfg!(target_os = "macos") {
         return vec![];
     }
     vec![ComponentDescriptor {
@@ -16,7 +16,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
 }
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     let _ = control;
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(target_os = "macos")]
     if config.component == "fallback.mp3.encode" {
         return Ok(Box::new(encode::Mp3::new(config)?));
     }

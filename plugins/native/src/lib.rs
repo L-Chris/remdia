@@ -1,5 +1,6 @@
 //! Self-contained buffer filters and simple mux/sink components. No codec libraries.
 mod filters;
+mod gapless;
 mod mux;
 use anyhow::{Result, bail};
 use remdia_graph::*;
@@ -36,6 +37,12 @@ fn descriptors() -> Vec<ComponentDescriptor> {
             DataKind::Bytes,
         ),
         (
+            "native.mp3.gapless_mux",
+            "mux",
+            Some(DataKind::Bytes),
+            DataKind::Bytes,
+        ),
+        (
             "native.file.sink",
             "sink",
             Some(DataKind::Bytes),
@@ -59,6 +66,7 @@ fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
         "native.wav.mux" => Box::new(mux::Wav::new(config)?),
         "native.packet.copy" => Box::new(filters::Copy::new()),
         "native.mp3.mux" => Box::new(mux::PacketMux::new(config)?),
+        "native.mp3.gapless_mux" => Box::new(gapless::Mux::new(config)?),
         "native.file.sink" => Box::new(mux::FileSink::new(config)?),
         other => bail!("unknown native component {other}"),
     })

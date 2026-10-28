@@ -734,7 +734,7 @@ impl Component for Decoder {
     }
 }
 
-pub fn capabilities(encoding: bool) -> Result<serde_json::Value> {
+pub fn capabilities(encoding: bool, control: Control) -> Result<serde_json::Value> {
     let _apartment = Apartment::new()?;
     startup()?;
     let mut decode = Vec::new();
@@ -770,7 +770,12 @@ pub fn capabilities(encoding: bool) -> Result<serde_json::Value> {
     } else {
         vec![]
     };
+    let gapless = if encoding && rates.contains(&16000) {
+        Some(super::windows_gapless::get(control)?)
+    } else {
+        None
+    };
     Ok(
-        serde_json::json!({"decode":decode,"resample":unsafe {CoCreateInstance::<_,IMFTransform>(&CResamplerMediaObject,None,CLSCTX_INPROC_SERVER)}.is_ok(),"mp3_encode":mp3_encode,"mp3_input_rates":rates,"mp3_gapless":false}),
+        serde_json::json!({"decode":decode,"resample":unsafe {CoCreateInstance::<_,IMFTransform>(&CResamplerMediaObject,None,CLSCTX_INPROC_SERVER)}.is_ok(),"mp3_encode":mp3_encode,"mp3_input_rates":rates,"mp3_gapless":gapless.is_some(),"mp3_encoder_delay_samples":gapless.map(|c|c.delay),"mp3_decoder_implicit_trim":gapless.map(|c|c.decoder_trim),"mp3_calibration_correlation":gapless.map(|c|c.score)}),
     )
 }

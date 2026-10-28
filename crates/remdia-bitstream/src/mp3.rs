@@ -87,6 +87,100 @@ pub fn metadata_frame_bytes(data: &[u8]) -> Result<usize> {
         },
     )
 }
+/// Own Xing/LAME-compatible metadata only. The audio bytes are produced by the
+/// caller's encoder; this does not encode or decode any samples.
+pub fn gapless_file(
+    data: &[u8],
+    rate: u32,
+    channels: u16,
+    valid: u64,
+    delay: u32,
+) -> Result<Vec<u8>> {
+    ensure!(valid > 0 && delay <= 4095, "invalid MP3 gapless parameters");
+    ensure!(
+        metadata_frame_bytes(data)? == 0,
+        "MP3 stream already has an information frame"
+    );
+    let first = header(data)?;
+    ensure!(
+        first.rate == rate
+            && if data[3] & 0xc0 == 0xc0 {
+                channels == 1
+            } else {
+                channels == 2
+            },
+        "MP3 mux format mismatch"
+    );
+    let mut offsets = Vec::new();
+    let mut at = 0;
+    while at < data.len() {
+        let h = header(&data[at..])?;
+        ensure!(
+            h.rate == rate && h.samples == first.samples && at + h.bytes <= data.len(),
+            "invalid MP3 mux frame"
+        );
+        offsets.push(at);
+        at += h.bytes;
+    }
+    let total_samples = offsets.len() as u64 * u64::from(first.samples);
+    let padding = total_samples
+        .checked_sub(valid + u64::from(delay))
+        .context("MP3 encoder did not flush enough tail samples")?;
+    ensure!(
+        (529..=4095).contains(&padding),
+        "MP3 padding outside gapless tag bounds: {padding}"
+    );
+    let mut prefix = data[..4].to_vec();
+    prefix[1] |= 1; // unprotected metadata frame, independent of audio CRCs
+    prefix[2] = (prefix[2] & 12) | 0x90; // enough room for a complete tag at all supported rates
+    let info = header(&prefix)?;
+    let mut frame = vec![0u8; info.bytes];
+    frame[..4].copy_from_slice(&prefix);
+    let p = info.side;
+    frame[p..p + 4].copy_from_slice(b"Xing");
+    frame[p + 4..p + 8].copy_from_slice(&15u32.to_be_bytes());
+    frame[p + 8..p + 12].copy_from_slice(&u32::try_from(offsets.len())?.to_be_bytes());
+    let stream_bytes = u32::try_from(frame.len() + data.len())?;
+    frame[p + 12..p + 16].copy_from_slice(&stream_bytes.to_be_bytes());
+    for i in 1..100 {
+        let offset = frame.len() + offsets[i * offsets.len() / 100];
+        frame[p + 16 + i] = ((offset as u64 * 256 / u64::from(stream_bytes)).min(255)) as u8;
+    }
+    let tag = p + 120;
+    // Compatibility signature identifies the tag layout, not a linked LAME
+    // encoder. ID3 TENC below records the actual system encoder/muxer.
+    frame[tag..tag + 9].copy_from_slice(b"LAMErmdia");
+    frame[tag + 9] = 1;
+    let trim = (delay << 12) | padding as u32;
+    frame[tag + 21..tag + 24].copy_from_slice(&trim.to_be_bytes()[1..]);
+    frame[tag + 28..tag + 32].copy_from_slice(&stream_bytes.to_be_bytes());
+    let mut crc = 0u16;
+    for byte in &frame[..tag + 34] {
+        crc ^= u16::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ if crc & 1 != 0 { 0xa001 } else { 0 };
+        }
+    }
+    frame[tag + 34..tag + 36].copy_from_slice(&crc.to_be_bytes());
+    let text = b"\0Windows Media Foundation / remdia";
+    let body_size = 10 + text.len();
+    let mut out = Vec::with_capacity(10 + body_size + frame.len() + data.len());
+    out.extend_from_slice(b"ID3\x03\0\0");
+    let size = body_size as u32;
+    out.extend_from_slice(&[
+        ((size >> 21) & 127) as u8,
+        ((size >> 14) & 127) as u8,
+        ((size >> 7) & 127) as u8,
+        (size & 127) as u8,
+    ]);
+    out.extend_from_slice(b"TENC");
+    out.extend_from_slice(&(text.len() as u32).to_be_bytes());
+    out.extend_from_slice(&[0, 0]);
+    out.extend_from_slice(text);
+    out.extend_from_slice(&frame);
+    out.extend_from_slice(data);
+    Ok(out)
+}
 #[derive(Clone, Copy, Debug)]
 pub struct Gapless {
     pub delay: u32,
@@ -161,6 +255,28 @@ pub fn gapless(path: &Path) -> Result<Option<Gapless>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn own_gapless_mux_preserves_audio_and_declares_exact_duration() -> Result<()> {
+        let mut raw = vec![0; 288 * 4];
+        for frame in raw.as_chunks_mut::<288>().0 {
+            frame[..4].copy_from_slice(&[255, 243, 136, 192]);
+        }
+        let encoded = gapless_file(&raw, 16000, 1, 1000, 672)?;
+        assert!(encoded.ends_with(&raw));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("mp3-gapless-{}.mp3", std::process::id()));
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        std::fs::write(&path, &encoded)?;
+        let info = gapless(&path)?.unwrap();
+        std::fs::remove_file(path)?;
+        assert_eq!(info.valid_samples, 1000);
+        assert_eq!(info.delay, 1201);
+        assert_eq!(info.padding, 103);
+        assert!(gapless_file(&raw, 16000, 1, 2000, 672).is_err());
+        assert!(gapless_file(&raw, 44100, 1, 1000, 672).is_err());
+        Ok(())
+    }
     #[test]
     fn packet_count_handles_aggregate_samples_and_rejects_partial_frames() {
         let mut packet = vec![0u8; 417 * 2];

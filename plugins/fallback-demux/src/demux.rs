@@ -2,8 +2,8 @@ use anyhow::{Context, Result, ensure};
 use remdia_graph::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use symphonia::core::audio::Channels;
-use symphonia::core::{
+use symphonia_core::audio::Channels;
+use symphonia_core::{
     codecs::{CodecParameters, audio::AudioCodecId, video::well_known as video},
     formats::probe::Hint,
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
@@ -30,7 +30,7 @@ fn nearby_keyframe(keys: &[(i64, i64)], target: i64) -> Option<i64> {
         .map(|p| p.1)
 }
 fn codec_name(id: AudioCodecId) -> String {
-    use symphonia::core::codecs::audio::well_known::*;
+    use symphonia_core::codecs::audio::well_known::*;
     let known = [
         (CODEC_ID_PCM_S32LE, "pcm_s32le"),
         (CODEC_ID_PCM_S32LE_PLANAR, "pcm_s32le_planar"),
@@ -117,7 +117,7 @@ fn codec_name(id: AudioCodecId) -> String {
         .map(|(_, name)| name.to_owned())
         .unwrap_or_else(|| id.to_string())
 }
-fn video_name(p: &symphonia::core::codecs::video::VideoCodecParameters) -> String {
+fn video_name(p: &symphonia_core::codecs::video::VideoCodecParameters) -> String {
     match p.codec {
         video::CODEC_ID_H264 => "h264",
         video::CODEC_ID_HEVC => "hevc",
@@ -176,9 +176,9 @@ impl Demux {
             let Some(params) = &t.codec_params else {
                 continue;
             };
-            let tb = t.time_base.unwrap_or_else(|| {
-                symphonia::core::units::TimeBase::try_new(1, 1_000_000).unwrap()
-            });
+            let tb = t
+                .time_base
+                .unwrap_or_else(|| symphonia_core::units::TimeBase::try_new(1, 1_000_000).unwrap());
             let mut track = Track {
                 index: t.id as usize,
                 kind: String::new(),
@@ -578,15 +578,23 @@ impl Component for Demux {
 // A cache-backed HTTP stream must not wait for optional tags at the file tail.
 // Keep container length/Range support intact; only trailing metadata factories
 // are omitted during remote probing. Local files retain the full metadata set.
-fn probe_for(request: &Request) -> &'static symphonia::core::formats::probe::Probe {
-    if !request.source.starts_with("http://") && !request.source.starts_with("https://") {
-        return symphonia::default::get_probe();
-    }
-    static REMOTE: std::sync::OnceLock<symphonia::core::formats::probe::Probe> =
+fn probe_for(request: &Request) -> &'static symphonia_core::formats::probe::Probe {
+    let remote = request.source.starts_with("http://") || request.source.starts_with("https://");
+    static LOCAL: std::sync::OnceLock<symphonia_core::formats::probe::Probe> =
         std::sync::OnceLock::new();
-    REMOTE.get_or_init(|| {
-        use symphonia::default::formats::*;
-        let mut p = symphonia::core::formats::probe::Probe::new();
+    static REMOTE: std::sync::OnceLock<symphonia_core::formats::probe::Probe> =
+        std::sync::OnceLock::new();
+    let slot = if remote { &REMOTE } else { &LOCAL };
+    slot.get_or_init(|| {
+        use symphonia_bundle_flac::FlacReader;
+        use symphonia_bundle_mp3::MpaReader;
+        use symphonia_codec_aac::AdtsReader;
+        use symphonia_format_caf::CafReader;
+        use symphonia_format_isomp4::IsoMp4Reader;
+        use symphonia_format_mkv::MkvReader;
+        use symphonia_format_ogg::OggReader;
+        use symphonia_format_riff::{AiffReader, WavReader};
+        let mut p = symphonia_core::formats::probe::Probe::new();
         p.register_format::<AdtsReader<'_>>();
         p.register_format::<CafReader<'_>>();
         p.register_format::<FlacReader<'_>>();
@@ -596,7 +604,11 @@ fn probe_for(request: &Request) -> &'static symphonia::core::formats::probe::Pro
         p.register_format::<WavReader<'_>>();
         p.register_format::<OggReader<'_>>();
         p.register_format::<MkvReader<'_>>();
-        p.register_metadata::<symphonia::default::meta::Id3v2Reader<'_>>();
+        p.register_metadata::<symphonia_metadata::id3v2::Id3v2Reader<'_>>();
+        if !remote {
+            p.register_metadata::<symphonia_metadata::ape::ApeReader<'_>>();
+            p.register_metadata::<symphonia_metadata::id3v1::Id3v1Reader<'_>>();
+        }
         p
     })
 }

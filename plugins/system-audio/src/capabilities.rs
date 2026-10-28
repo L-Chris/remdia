@@ -2,10 +2,11 @@ use anyhow::Result;
 use remdia_graph::*;
 #[cfg(not(windows))]
 use serde_json::json;
-pub fn query(config: &NodeConfig) -> Result<serde_json::Value> {
+pub fn query(config: &NodeConfig, control: Control) -> Result<serde_json::Value> {
+    let _ = (config, control);
     #[cfg(target_os = "macos")]
     {
-        let _ = config;
+        let _ = (config, control);
         let formats = super::audio_toolbox_sys::format_ids(false)?;
         let decode = [
             ("aac", *b"aac "),
@@ -33,7 +34,7 @@ pub fn query(config: &NodeConfig) -> Result<serde_json::Value> {
     }
     #[cfg(windows)]
     {
-        super::windows_audio::capabilities(config.settings["operation"] != "decode")
+        super::windows_audio::capabilities(config.settings["operation"] != "decode", control)
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     Ok(json!({"decode":[],"resample":false,"mp3_encode":false}))
@@ -60,8 +61,8 @@ pub struct Capabilities {
     pending: Option<MediaBuffer>,
 }
 impl Capabilities {
-    pub fn new(config: &NodeConfig) -> Result<Self> {
-        let bytes = serde_json::to_vec(&query(config)?)?;
+    pub fn new(config: &NodeConfig, control: Control) -> Result<Self> {
+        let bytes = serde_json::to_vec(&query(config, control)?)?;
         Ok(Self {
             info: NodeInfo {
                 input: None,
