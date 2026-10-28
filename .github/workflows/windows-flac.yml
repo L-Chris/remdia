@@ -1,0 +1,26 @@
+name: Windows FLAC diagnostics
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'plugins/system-demux/src/windows/**'
+      - 'scripts/probe-windows-flac.py'
+      - '.github/workflows/windows-flac.yml'
+permissions:
+  contents: read
+jobs:
+  native-seek:
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+            .deps
+          key: flac-probe-${{ github.sha }}
+          restore-keys: windows-
+      - run: python scripts/probe-windows-flac.py

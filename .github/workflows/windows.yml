@@ -59,7 +59,7 @@ jobs:
           $env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
           python scripts/test-system-components.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --workspace --locked -- --include-ignored --skip system_audio_tests:: --skip system_demux_tests::
+          cargo test --workspace --locked -- --include-ignored --skip system_audio_tests:: --skip system_demux_tests:: --skip windows::seek_tests::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -79,7 +79,7 @@ jobs:
           & "$stage/remdia.exe" extract $media "$stage/audio.mp3" --duration-us 1000000
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package MP3 failed' }
       - uses: actions/cache/save@v4
-        if: always() && steps.cache.outputs.cache-hit != 'true'
+        if: '!cancelled() && steps.cache.outputs.cache-hit != ''true'''
         with:
           path: |
             ~/.cargo/registry

@@ -18,6 +18,8 @@ use windows::{
     },
     core::{GUID, PCWSTR},
 };
+#[cfg(test)]
+mod seek_tests;
 use windows::{
     Win32::{
         Storage::EnhancedStorage::{
