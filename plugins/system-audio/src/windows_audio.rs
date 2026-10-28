@@ -695,6 +695,18 @@ impl Component for Decoder {
         Ok(())
     }
     fn reset(&mut self, generation: u64, _target: i64) -> Result<()> {
+        if self.track.codec == "flac" {
+            // Reset before first input must be equivalent to reset after EOF.
+            // Do not depend on the FLAC MFT's partially initialized flush state.
+            let config = NodeConfig {
+                component: "windows.audio.decode".into(),
+                settings: serde_json::json!({"track":self.track,"trace":self.trace}),
+            };
+            let mut fresh = Self::new(&config)?;
+            fresh.generation = generation;
+            *self = fresh;
+            return Ok(());
+        }
         unsafe {
             self.transform
                 .ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;

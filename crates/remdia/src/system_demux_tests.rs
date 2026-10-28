@@ -241,35 +241,38 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
     let mut request = Request::playback(root.join("audio-tail.flac").to_str().unwrap());
     request.task = crate::Task::Audio;
     request.policy = crate::ProviderPolicy::SystemOnly;
-    let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
-    eprintln!("lossless source: {:?}", session.info());
-    // Exercise an in-flight decoder before the first application seek.
-    assert!(session.read().unwrap().is_some());
-    for target in [3_600_000, 200_000, 3_600_000, 0] {
-        session.seek(target).unwrap();
-        let mut count = 0usize;
-        let mut first = None;
-        let mut last = target;
-        while let Some(frame) = session.read().unwrap() {
-            if let FrameInfo::Audio {
-                samples,
-                pts_us,
-                rate,
-                ..
-            } = *frame.info()
-            {
-                first.get_or_insert(pts_us);
-                assert!(pts_us >= last - 1 && pts_us <= 4_000_000);
-                count += samples;
-                last = pts_us + (samples as u64 * 1_000_000 / u64::from(rate)) as i64;
-            }
+    for pre_read in [false, true, false] {
+        let mut session = unsafe { engine.open(request.clone(), Cancellation::default()) }.unwrap();
+        eprintln!("lossless source, pre_read={pre_read}: {:?}", session.info());
+        if pre_read {
+            assert!(session.read().unwrap().is_some());
         }
-        eprintln!("seek={target} first={first:?} end={last} samples={count}");
-        let expected = ((4_000_000 - target) as u64 * 48000 / 1_000_000) as usize;
-        assert!(
-            count.abs_diff(expected) <= 1,
-            "seek={target} samples={count}, expected={expected}"
-        );
-        assert!(last.abs_diff(4_000_000) <= 21, "seek={target} end={last}");
+        for target in [3_600_000, 200_000, 3_600_000, 0] {
+            session.seek(target).unwrap();
+            let mut count = 0usize;
+            let mut first = None;
+            let mut last = target;
+            while let Some(frame) = session.read().unwrap() {
+                if let FrameInfo::Audio {
+                    samples,
+                    pts_us,
+                    rate,
+                    ..
+                } = *frame.info()
+                {
+                    first.get_or_insert(pts_us);
+                    assert!(pts_us >= last - 1 && pts_us <= 4_000_000);
+                    count += samples;
+                    last = pts_us + (samples as u64 * 1_000_000 / u64::from(rate)) as i64;
+                }
+            }
+            eprintln!("seek={target} first={first:?} end={last} samples={count}");
+            let expected = ((4_000_000 - target) as u64 * 48000 / 1_000_000) as usize;
+            assert!(
+                count.abs_diff(expected) <= 1,
+                "seek={target} samples={count}, expected={expected}"
+            );
+            assert!(last.abs_diff(4_000_000) <= 21, "seek={target} end={last}");
+        }
     }
 }

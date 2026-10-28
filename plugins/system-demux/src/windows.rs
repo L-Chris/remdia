@@ -162,6 +162,7 @@ pub struct Demux {
     source: std::path::PathBuf,
     properties: Option<IPropertyStore>,
     mp3: BTreeMap<u32, (remdia_bitstream::mp3::Gapless, Option<i64>)>,
+    config: NodeConfig,
     _apartment: Apartment,
 }
 impl Demux {
@@ -311,6 +312,7 @@ impl Demux {
                 source: file_path,
                 properties,
                 mp3,
+                config: config.clone(),
                 _apartment: apartment,
             })
         }
@@ -536,20 +538,27 @@ impl Component for Demux {
             .media
             .as_ref()
             .is_some_and(|media| media.tracks.iter().any(|track| track.codec == "flac"));
-        // MF's FLAC source can accept a nonzero seek and immediately report EOF
-        // for valid small-block streams. Rebuild decoder history from the start;
-        // Session clips the output at the requested sample. This deliberately
-        // trades seek latency for correctness until native random access is
-        // certified across FLAC block profiles.
-        let target = if flac {
-            0
-        } else {
-            target
-                .saturating_sub(250000)
-                .max(0)
-                .checked_mul(10)
-                .context("seek timestamp overflow")?
-        };
+        // MF FLAC seeks can report premature EOF, including a reset before the
+        // first sample has started streaming. A fresh compressed source starts
+        // at zero without depending on the handler's seek/flush state. Session
+        // clips the preroll at the target; long seeks deliberately cost a scan.
+        if flac {
+            let mut fresh = Self::open(&self.config, self.control)?;
+            let tracks =
+                |info: &NodeInfo| serde_json::to_value(&info.media.as_ref().unwrap().tracks);
+            ensure!(
+                tracks(&fresh.info)? == tracks(&self.info)?,
+                "system source tracks changed during seek"
+            );
+            fresh.generation = generation;
+            *self = fresh;
+            return Ok(());
+        }
+        let target = target
+            .saturating_sub(250000)
+            .max(0)
+            .checked_mul(10)
+            .context("seek timestamp overflow")?;
         unsafe {
             let mut value = PROPVARIANT::default();
             (*value.Anonymous.Anonymous).vt = VT_I8;
