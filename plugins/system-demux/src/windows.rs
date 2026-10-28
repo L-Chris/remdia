@@ -161,6 +161,7 @@ pub struct Demux {
     selected: BTreeSet<u32>,
     source: std::path::PathBuf,
     properties: Option<IPropertyStore>,
+    mp3: BTreeMap<u32, (remdia_bitstream::mp3::Gapless, Option<i64>)>,
     _apartment: Apartment,
 }
 impl Demux {
@@ -219,7 +220,7 @@ impl Demux {
                 }
             }
             ensure!(!tracks.is_empty(), "no system-readable media tracks");
-            let duration = if let Ok(mut value) = reader
+            let mut duration = if let Ok(mut value) = reader
                 .GetPresentationAttribute(MF_SOURCE_READER_MEDIASOURCE.0 as u32, &MF_PD_DURATION)
             {
                 let status = PropVariantToInt64(&value);
@@ -228,6 +229,28 @@ impl Demux {
             } else {
                 None
             };
+            let mut mp3 = BTreeMap::new();
+            for track in &mut tracks {
+                if track.codec == "mp3"
+                    && let Some(info) = remdia_bitstream::mp3::gapless(&file_path)?
+                {
+                    track.time_base = Rational {
+                        num: 1,
+                        den: track.sample_rate as i32,
+                    };
+                    track.initialization["delay_samples"] = info.delay.into();
+                    track.initialization["padding_samples"] = info.padding.into();
+                    track.initialization["num_frames"] = info.valid_samples.into();
+                    mp3.insert(track.index as u32, (info, Some(0)));
+                }
+            }
+            if tracks.len() == 1
+                && let Some((info, _)) = mp3.values().next()
+            {
+                duration = Some(i64::try_from(
+                    u128::from(info.valid_samples) * 1_000_000 / u128::from(tracks[0].sample_rate),
+                )?);
+            }
             let properties: Option<IPropertyStore> =
                 SHGetPropertyStoreFromParsingName(PCWSTR(source.as_ptr()), None, GPS_DEFAULT).ok();
             let mut metadata = BTreeMap::new();
@@ -259,7 +282,7 @@ impl Demux {
                     output: PortCaps::new(DataKind::Packet),
                     max_output_bytes: request.max_packet_bytes,
                     media: Some(MediaInfo {
-                        container: "mediafoundation".into(),
+                        container: super::capabilities::container(&request.source)?.into(),
                         duration_us: duration,
                         origin_us: 0,
                         metadata,
@@ -272,6 +295,7 @@ impl Demux {
                 selected,
                 source: file_path,
                 properties,
+                mp3,
                 _apartment: apartment,
             })
         }
@@ -333,7 +357,7 @@ impl Component for Demux {
             }
             let mut data = std::ptr::null_mut();
             buffer.Lock(&mut data, None, None)?;
-            let bytes = std::slice::from_raw_parts(data, length).to_vec();
+            let mut bytes = std::slice::from_raw_parts(data, length).to_vec();
             buffer.Unlock()?;
             let dts = sample
                 .GetUINT64(&MFSampleExtension_DecodeTimestamp)
@@ -344,22 +368,73 @@ impl Component for Demux {
                 .GetUINT32(&MFSampleExtension_CleanPoint)
                 .ok()
                 .map(|n| n != 0);
+            let track = self
+                .info
+                .media
+                .as_ref()
+                .unwrap()
+                .tracks
+                .iter()
+                .find(|track| track.index == stream as usize)
+                .context("unknown system stream")?;
+            let mut header = FrameInfo::Packet {
+                pts,
+                dts,
+                duration,
+                time_base: Rational {
+                    num: 1,
+                    den: 10_000_000,
+                },
+                keyframe,
+                trim_start: 0,
+                trim_end: 0,
+            };
+            if track.codec == "mp3" {
+                let metadata = remdia_bitstream::mp3::metadata_frame_bytes(&bytes)?;
+                if metadata > 0 {
+                    bytes.drain(..metadata);
+                    if bytes.is_empty() {
+                        return Ok(Receive::NeedInput);
+                    }
+                }
+                let frames =
+                    remdia_bitstream::mp3::packet_samples(&bytes, track.sample_rate)? as u64;
+                if let Some((info, next)) = self.mp3.get_mut(&stream) {
+                    let raw = next.unwrap_or(i64::try_from(
+                        (i128::from(pts) * i128::from(track.sample_rate) + 5_000_000) / 10_000_000,
+                    )?);
+                    *next = Some(
+                        raw.checked_add(i64::try_from(frames)?)
+                            .context("MP3 source duration overflow")?,
+                    );
+                    let start = i64::from(info.delay)
+                        .saturating_sub(raw)
+                        .max(0)
+                        .min(frames as i64) as u64;
+                    let end = (i128::from(raw) + i128::from(frames)
+                        - i128::from(info.delay)
+                        - i128::from(info.valid_samples))
+                    .max(0)
+                    .min(i128::from(frames)) as u64;
+                    header = FrameInfo::Packet {
+                        pts: raw - i64::from(info.delay),
+                        dts: raw - i64::from(info.delay),
+                        duration: frames.saturating_sub(start + end),
+                        time_base: Rational {
+                            num: 1,
+                            den: track.sample_rate as i32,
+                        },
+                        keyframe,
+                        trim_start: start,
+                        trim_end: end,
+                    };
+                }
+            }
             Ok(Receive::Output(MediaBuffer::new(
                 BufferHeader {
                     stream_id: stream,
                     generation: self.generation,
-                    info: FrameInfo::Packet {
-                        pts,
-                        dts,
-                        duration,
-                        time_base: Rational {
-                            num: 1,
-                            den: 10_000_000,
-                        },
-                        keyframe,
-                        trim_start: 0,
-                        trim_end: 0,
-                    },
+                    info: header,
                 },
                 vec![bytes],
             )))
@@ -441,7 +516,11 @@ impl Component for Demux {
     }
     fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
         self.control.check()?;
-        let target = target.checked_mul(10).context("seek timestamp overflow")?;
+        let target = target
+            .saturating_sub(250000)
+            .max(0)
+            .checked_mul(10)
+            .context("seek timestamp overflow")?;
         unsafe {
             let mut value = PROPVARIANT::default();
             (*value.Anonymous.Anonymous).vt = VT_I8;
@@ -450,6 +529,9 @@ impl Component for Demux {
             self.reader.SetCurrentPosition(&GUID::zeroed(), &value)?;
         }
         self.generation = generation;
+        for (_, next) in self.mp3.values_mut() {
+            *next = if target == 0 { Some(0) } else { None };
+        }
         self.ended.clear();
         Ok(())
     }

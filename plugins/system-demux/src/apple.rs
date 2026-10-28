@@ -20,6 +20,9 @@ unsafe extern "C" {
     fn rm_demux_open(
         path: *const c_char,
         mime: *const c_char,
+        timeout_ms: u64,
+        poll: unsafe extern "C" fn(*mut c_void) -> u8,
+        context: *mut c_void,
         reader: *mut *mut c_void,
         metadata: *mut *mut c_char,
     ) -> i32;
@@ -95,7 +98,21 @@ impl Demux {
         )?;
         let mut reader = std::ptr::null_mut();
         let mut metadata = std::ptr::null_mut();
-        status(unsafe { rm_demux_open(path.as_ptr(), mime.as_ptr(), &mut reader, &mut metadata) })?;
+        let result = unsafe {
+            rm_demux_open(
+                path.as_ptr(),
+                mime.as_ptr(),
+                request.timeout_ms,
+                control.0.cancelled,
+                control.0.context,
+                &mut reader,
+                &mut metadata,
+            )
+        };
+        if result < 0 {
+            control.check()?;
+            status(result)?;
+        }
         ensure!(
             !reader.is_null() && !metadata.is_null(),
             "missing system demux result"
@@ -116,7 +133,9 @@ impl Demux {
         let bytes = unsafe { CStr::from_ptr(metadata) }.to_bytes();
         let media = serde_json::from_slice(bytes);
         unsafe { rm_demux_free(metadata.cast()) };
-        demux.info.media = Some(media?);
+        let mut media: MediaInfo = media?;
+        media.container = super::capabilities::container(&request.source)?.into();
+        demux.info.media = Some(media);
         control.check()?;
         Ok(demux)
     }

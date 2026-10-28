@@ -253,11 +253,14 @@ impl Decoder {
         let frames = bytes.len() / stride;
         if self.first && self.track.codec != "vorbis" {
             self.first = false;
-            let nominal = self
-                .stamps
-                .front()
-                .map(|stamp| stamp.frames)
-                .context("missing decoder stamp")?;
+            let nominal = if self.track.codec == "mp3" {
+                if self.rate < 32000 { 576 } else { 1152 }
+            } else {
+                self.stamps
+                    .front()
+                    .map(|stamp| stamp.frames)
+                    .context("missing decoder stamp")?
+            };
             let mut implicit = (nominal - frames % nominal) % nominal;
             while implicit > 0 {
                 let stamp = self
@@ -454,11 +457,7 @@ impl Component for Decoder {
                     if matches!(self.track.codec.as_str(), "mp3" | "opus" | "vorbis") {
                         let frames = match self.track.codec.as_str() {
                             "mp3" => {
-                                if self.track.sample_rate < 32000 {
-                                    576
-                                } else {
-                                    1152
-                                }
+                                remdia_bitstream::mp3::packet_samples(data, self.track.sample_rate)?
                             }
                             "opus" => {
                                 super::opus::packet_frames(data, self.track.sample_rate)? as usize
@@ -481,7 +480,15 @@ impl Component for Decoder {
                                     .context("Vorbis duration overflow")?
                             }
                         };
-                        ensure!(frames <= 32768, "audio packet duration exceeds budget");
+                        ensure!(
+                            frames
+                                <= if self.track.codec == "mp3" {
+                                    self.track.sample_rate as usize * 120
+                                } else {
+                                    32768
+                                },
+                            "audio packet duration exceeds budget"
+                        );
                         if frames > 0 {
                             let mut header = input.header.clone();
                             let trim = self.private_skip.min(frames);

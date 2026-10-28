@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+static double monotonic(void) {struct timespec time={0};clock_gettime(CLOCK_MONOTONIC,&time);return (double)time.tv_sec+(double)time.tv_nsec/1000000000.;}
 static _Thread_local char failure[1024];
 const char *rm_demux_error(void) {return failure;}
 static int fail(NSString *message) {snprintf(failure,sizeof(failure),"%s",message.UTF8String ?: "system demux failed");return -1;}
@@ -38,9 +40,18 @@ static uint64_t samples(CMTime duration,uint32_t rate) {return CMTIME_IS_NUMERIC
 @property AVAssetReader *reader;
 @property NSArray<RmTrack*> *tracks;
 @property NSData *artwork;
+@property uint64_t timeout;
+@property double deadline;
+@property RmPoll poll;
+@property void *context;
 @end
 @implementation RmReader
 @end
+static int active(RmReader *reader) {
+ if(reader.poll&&reader.poll(reader.context))return fail(@"system source cancelled or interrupted");
+ if(monotonic()>reader.deadline)return fail(@"system source operation timed out");
+ return 0;
+}
 static int fill(RmReader *reader,RmTrack *track);
 static NSString *audio_name(const AudioStreamBasicDescription *f) {
  switch(f->mFormatID) {
@@ -81,12 +92,12 @@ static int start(RmReader *state,int64_t target) {
  state.reader=[[AVAssetReader alloc] initWithAsset:state.asset error:&error];
  if(!state.reader)return fail(error.description);
  if(target>0) {
-  CMTime begin=CMTimeMake(target,1000000);
+  CMTime begin=CMTimeMake(MAX(0,target-250000),1000000);
   for(RmTrack *track in state.tracks)if([track.track.mediaType isEqualToString:AVMediaTypeVideo]) {
    AVSampleCursor *cursor=[track.track makeSampleCursorWithPresentationTimeStamp:begin];
    if(!cursor){begin=kCMTimeZero;break;}
    unsigned steps=0;
-   while(!cursor.currentSampleSyncInfo.sampleIsFullSync && [cursor stepInDecodeOrderByCount:-1])if(++steps>65536)return fail(@"excessive video preroll");
+   while(!cursor.currentSampleSyncInfo.sampleIsFullSync && [cursor stepInDecodeOrderByCount:-1]) {if(active(state))return -1;if(++steps>65536)return fail(@"excessive video preroll");}
    if(CMTimeCompare(cursor.presentationTimeStamp,begin)<0)begin=cursor.presentationTimeStamp;
   }
   state.reader.timeRange=CMTimeRangeFromTimeToTime(begin,state.asset.duration);
@@ -101,11 +112,17 @@ static int start(RmReader *state,int64_t target) {
  }
  return [state.reader startReading]?0:fail(state.reader.error.description);
 }
-int rm_demux_open(const char *path,const char *mime,void **reader,char **metadata) { @autoreleasepool {
- *reader=NULL;*metadata=NULL;RmReader *state=[RmReader new];
+int rm_demux_open(const char *path,const char *mime,uint64_t timeout_ms,RmPoll poll,void *context,void **reader,char **metadata) { @autoreleasepool {
+ *reader=NULL;*metadata=NULL;RmReader *state=[RmReader new];state.timeout=timeout_ms;state.poll=poll;state.context=context;state.deadline=monotonic()+(double)timeout_ms/1000.;
  NSMutableDictionary *options=[@{AVURLAssetPreferPreciseDurationAndTimingKey:@YES} mutableCopy];
  if(mime&&mime[0])options[AVURLAssetOverrideMIMETypeKey]=@(mime);
  state.asset=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(path)] options:options];
+ dispatch_semaphore_t loaded=dispatch_semaphore_create(0);
+ [state.asset loadValuesAsynchronouslyForKeys:@[@"tracks",@"duration",@"commonMetadata"] completionHandler:^{dispatch_semaphore_signal(loaded);}];
+ while(dispatch_semaphore_wait(loaded,dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_MSEC)))if(active(state)){[state.asset cancelLoading];return -1;}
+ NSError *loadError=nil;if([state.asset statusOfValueForKey:@"tracks" error:&loadError]!=AVKeyValueStatusLoaded)return fail(loadError.description);
+ if(active(state))return -1;
+
  NSMutableArray *tracks=[NSMutableArray array],*descriptions=[NSMutableArray array];
  NSMutableDictionary *tags=[NSMutableDictionary dictionary];
  for(AVMetadataItem *item in state.asset.commonMetadata) {
@@ -177,7 +194,9 @@ int rm_demux_open(const char *path,const char *mime,void **reader,char **metadat
 static int fill(RmReader *reader,RmTrack *track) {
  while(!track.sample||track.position>=CMSampleBufferGetNumSamples(track.sample)) {
   if(track.sample){CFRelease(track.sample);track.sample=NULL;}
+  if(active(reader))return -1;
   track.sample=[track.output copyNextSampleBuffer];track.position=0;track.offset=0;
+  if(active(reader))return -1;
   if(!track.sample)return reader.reader.status==AVAssetReaderStatusFailed?fail(reader.reader.error.description):0;
   if(track.first&&track.rate) {
    CFTypeRef trim=CMGetAttachment(track.sample,kCMSampleBufferAttachmentKey_TrimDurationAtStart,NULL);
@@ -196,7 +215,7 @@ static int fill(RmReader *reader,RmTrack *track) {
  return 1;
 }
 int rm_demux_read(void *handle,size_t limit,RmPacket *out) { @autoreleasepool {
- memset(out,0,sizeof(*out));RmReader *reader=(__bridge RmReader*)handle;RmTrack *selected=nil;int64_t earliest=INT64_MAX;
+ memset(out,0,sizeof(*out));RmReader *reader=(__bridge RmReader*)handle;reader.deadline=monotonic()+(double)reader.timeout/1000.;RmTrack *selected=nil;int64_t earliest=INT64_MAX;
  for(RmTrack *track in reader.tracks) {
   int result=fill(reader,track);if(result<0)return result;if(!result)continue;
   CMSampleTimingInfo timing;if(CMSampleBufferGetSampleTimingInfo(track.sample,track.position,&timing))return fail(@"invalid compressed sample timing");
@@ -234,7 +253,7 @@ int rm_demux_read(void *handle,size_t limit,RmPacket *out) { @autoreleasepool {
  }
  track.offset+=size;track.position+=count;return 1;
 }}
-int rm_demux_seek(void *handle,int64_t target) { @autoreleasepool {return start((__bridge RmReader*)handle,target);}}
+int rm_demux_seek(void *handle,int64_t target) { @autoreleasepool {RmReader *reader=(__bridge RmReader*)handle;reader.deadline=monotonic()+(double)reader.timeout/1000.;return start(reader,target);}}
 int rm_demux_artwork(void *handle,size_t limit,uint8_t **data,size_t *size) { @autoreleasepool {
  *data=NULL;*size=0;RmReader *reader=(__bridge RmReader*)handle;
  if(reader.artwork) {
