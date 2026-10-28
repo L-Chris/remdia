@@ -57,7 +57,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:REMDIA_TEST_PLUGIN_DIR = "$PWD/dist/remdia/plugins"
           $env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
-          cargo test --workspace --locked -- --include-ignored
+          python scripts/test-system-components.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked -- --include-ignored --skip system_audio_tests:: --skip system_demux_tests::
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

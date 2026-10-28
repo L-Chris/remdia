@@ -124,12 +124,14 @@ impl Decoder {
         } else {
             0
         };
-        let timestamp_shift = if track.codec == "opus" && track.initialization["container"] == "ogg"
-        {
-            pre_skip as i64
-        } else {
-            0
-        };
+        let timestamp_shift =
+            if let Some(shift) = track.initialization["timestamp_shift_samples"].as_i64() {
+                shift
+            } else if track.codec == "opus" && track.initialization["container"] == "ogg" {
+                pre_skip as i64
+            } else {
+                0
+            };
         let mut converter = std::ptr::null_mut();
         status(
             unsafe { sys::audio_converter_new(fw, &source, &output, &mut converter) },
@@ -166,7 +168,11 @@ impl Decoder {
         if aac {
             let asc: Vec<u8> =
                 serde_json::from_value(decoder.track.initialization["extra_data"].clone())?;
-            let cookie = super::apple_config::aac_cookie(&asc)?;
+            let cookie = if decoder.track.initialization["system_cookie"] == true {
+                asc
+            } else {
+                super::apple_config::aac_cookie(&asc)?
+            };
             status(
                 unsafe {
                     sys::audio_converter_set_property(
@@ -186,7 +192,9 @@ impl Decoder {
         ) {
             let mut cookie: Vec<u8> =
                 serde_json::from_value(decoder.track.initialization["extra_data"].clone())?;
-            if decoder.track.codec == "flac" {
+            if decoder.track.codec == "flac"
+                && decoder.track.initialization["system_cookie"] != true
+            {
                 ensure!(cookie.len() == 34, "invalid FLAC streaminfo");
                 let mut header = Vec::new();
                 header.extend_from_slice(&50u32.to_be_bytes());
@@ -195,7 +203,9 @@ impl Decoder {
                 header.extend(cookie);
                 cookie = header;
             }
-            if decoder.track.codec == "vorbis" {
+            if decoder.track.codec == "vorbis"
+                && decoder.track.initialization["system_cookie"] != true
+            {
                 // Symphonia publishes identification + setup, without comments.
                 // CoreAudio accepts the standard three-packet Xiph codec private
                 // format. Comments do not affect decoding; use an empty header.

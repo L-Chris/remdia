@@ -105,6 +105,13 @@ fn system_src_counts_fractional_tail_and_preserves_reset_generations() {
                         panic!("SRC {source_rate} -> {target_rate}: {error:#}")
                     }) {
                         Receive::Output(output) => {
+                            energy += output
+                                .bytes()
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|v| f64::from(f32::from_le_bytes(*v)).powi(2))
+                                .sum::<f64>();
                             if let FrameInfo::Audio {
                                 samples, pts_us, ..
                             } = output.header.info
@@ -128,7 +135,10 @@ fn system_src_counts_fractional_tail_and_preserves_reset_generations() {
                     (submitted as u128 * u128::from(target_rate)).div_ceil(u128::from(source_rate))
                         as usize
                 );
-                assert!(energy > 1., "system SRC lost the signal");
+                assert!(
+                    energy > 1.,
+                    "SRC {source_rate} -> {target_rate} lost the signal: {energy}"
+                );
                 filter.reset(generation + 1, 0).unwrap();
             }
         }

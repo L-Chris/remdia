@@ -428,3 +428,6 @@ impl AudioChunk {
 
 #[cfg(all(test, any(windows, target_os = "macos")))]
 mod system_audio_tests;
+
+#[cfg(all(test, target_os = "macos"))]
+mod system_demux_tests;
