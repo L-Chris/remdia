@@ -95,4 +95,6 @@ python scripts/audit-package.py dist/remdia
 
 语料已提交在 `tests/fixtures`，构建和测试均无需外部媒体工具。测试覆盖音频格式、范围裁剪、重采样与 gapless 尾部、MP3、封面、滤镜扇出、WAV finalize、预算、取消，以及 Windows 跨 DLL 的 packet → MFT → NV12 路径。CI 额外用独立 C 宿主检验 ABI，并在移除构建环境 PATH 后运行便携包。Windows x64、macOS aarch64/x86_64 是视频发布目标；Linux 可验证通用音频与图。
 
+可选的 [Blaze 构建实验](docs/benchmarks/blaze-2026-10-28.md)提供隔离的对照脚本及构建时间、编译内存、磁盘与媒体功能数据；当前保持 Cargo 作为默认构建和发布工具。
+
 [架构](docs/architecture.md) · [插件 ABI](docs/plugin-abi.md) · [macOS 设计](docs/macos-integration-design.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [第三方许可](THIRD_PARTY.md)
