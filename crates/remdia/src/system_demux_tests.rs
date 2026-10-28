@@ -276,3 +276,216 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires staged plugins and generated long FLAC fixtures"]
+fn system_long_flac_seek_preserves_samples_and_rapid_reset_generations() {
+    let engine = Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(std::env::var_os("REMDIA_TEST_FIXTURES").unwrap());
+    for (name, blocks) in [
+        ("flac-long-1024.flac", &[1024u64][..]),
+        ("flac-long-4096.flac", &[4096][..]),
+        ("flac-long-table.flac", &[1024][..]),
+        ("flac-long-variable.flac", &[1024, 4096, 2048][..]),
+    ] {
+        let mut request = Request::playback(root.join(name).to_str().unwrap());
+        request.task = crate::Task::Audio;
+        request.policy = crate::ProviderPolicy::SystemOnly;
+        request.audio_rate = 48000;
+        request.audio_channels = 1;
+        let mut session = unsafe { engine.open(request, Cancellation::default()).unwrap() };
+        assert_eq!(session.info().duration_us, Some(1_800_000_000));
+        // Supersede two seeks before the very first input, then repeat after EOF.
+        for _ in 0..3 {
+            session.seek(0).unwrap();
+            session.seek(900_000_000).unwrap();
+            let started = std::time::Instant::now();
+            let generation = session.seek(1_798_000_000).unwrap();
+            let mut count = 0usize;
+            while let Some(frame) = session.read().unwrap() {
+                assert_eq!(frame.generation(), generation);
+                let FrameInfo::Audio {
+                    pts_us,
+                    samples,
+                    rate,
+                    ..
+                } = *frame.info()
+                else {
+                    panic!("expected audio")
+                };
+                assert_eq!(rate, 48000);
+                assert!(
+                    (pts_us - 1_798_000_000 - count as i64 * 1_000_000 / 48000).abs() <= 21,
+                    "{name}: pts={pts_us}, emitted={count}"
+                );
+                if count == 0 {
+                    let sample = 1798 * 48000;
+                    let cycle = blocks.iter().sum::<u64>();
+                    let mut first = sample / cycle * cycle;
+                    for size in blocks {
+                        if sample < first + size {
+                            break;
+                        }
+                        first += size;
+                    }
+                    let expected = ((first / 1024) % 30000) as f32 - 15000.;
+                    let actual = f32::from_le_bytes(frame.bytes()[..4].try_into().unwrap());
+                    assert!(
+                        (actual - expected / 32768.).abs() < 1. / 32768.,
+                        "{name}: wrong seek sample {actual}, expected {}",
+                        expected / 32768.
+                    );
+                    eprintln!(
+                        "{name}: seek-to-first-PCM={:.3}ms",
+                        started.elapsed().as_secs_f64() * 1000.
+                    );
+                }
+                count += samples;
+            }
+            assert!(count.abs_diff(96000) <= 1, "{name}: tail samples={count}");
+        }
+        let generation = session.seek(0).unwrap();
+        let frame = session.read().unwrap().expect("replay after EOF");
+        assert_eq!(frame.generation(), generation);
+        assert_eq!(frame.info().pts_us(), Some(0));
+    }
+}
+
+#[test]
+#[ignore = "requires staged plugins and generated long FLAC fixtures"]
+fn system_flac_seek_decodes_only_target_packets() {
+    use crate::graph::{Component, MediaBuffer, NodeInfo, Receive};
+    use std::{cell::RefCell, rc::Rc};
+    #[derive(Default)]
+    struct Stats {
+        packets: usize,
+        bytes: usize,
+        container: serde_json::Value,
+    }
+    struct Counted {
+        inner: Box<dyn Component>,
+        stats: Rc<RefCell<Stats>>,
+    }
+    impl Component for Counted {
+        fn info(&self) -> &NodeInfo {
+            self.inner.info()
+        }
+        fn receive(&mut self) -> anyhow::Result<Receive> {
+            let result = self.inner.receive()?;
+            if let Receive::Output(ref buffer) = result {
+                let mut stats = self.stats.borrow_mut();
+                stats.packets += 1;
+                stats.bytes += buffer.bytes().len();
+            }
+            if let Some(buffer) = self.inner.command(&json!({"op":"flac.stats"}))? {
+                self.stats.borrow_mut().container = serde_json::from_slice(buffer.bytes())?;
+            }
+            Ok(result)
+        }
+        fn drain(&mut self) -> anyhow::Result<()> {
+            self.inner.drain()
+        }
+        fn reset(&mut self, generation: u64, target: i64) -> anyhow::Result<()> {
+            *self.stats.borrow_mut() = Stats::default();
+            self.inner.reset(generation, target)
+        }
+        fn command(&mut self, command: &serde_json::Value) -> anyhow::Result<Option<MediaBuffer>> {
+            self.inner.command(command)
+        }
+    }
+    let engine = Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(std::env::var_os("REMDIA_TEST_FIXTURES").unwrap());
+    for name in [
+        "flac-long-1024.flac",
+        "flac-long-4096.flac",
+        "flac-long-table.flac",
+        "flac-long-variable.flac",
+    ] {
+        let factory = TrustedFactory(engine.registry());
+        let cancel = Cancellation::default();
+        let mut demux = factory
+            .create(
+                &NodeConfig {
+                    component: format!("{}.demux", std::env::consts::OS),
+                    settings: serde_json::to_value(Request::playback(
+                        root.join(name).to_str().unwrap(),
+                    ))
+                    .unwrap(),
+                },
+                cancel.clone(),
+            )
+            .unwrap();
+        let track = &demux.info().media.as_ref().unwrap().tracks[0];
+        let stream = track.index as u32;
+        let decoder = factory
+            .create(
+                &NodeConfig {
+                    component: format!("{}.audio.decode", std::env::consts::OS),
+                    settings: json!({"track":track}),
+                },
+                cancel.clone(),
+            )
+            .unwrap();
+        let initial: serde_json::Value = serde_json::from_slice(
+            demux
+                .command(&json!({"op":"flac.stats"}))
+                .unwrap()
+                .unwrap()
+                .bytes(),
+        )
+        .unwrap();
+        let stats = Rc::new(RefCell::new(Stats::default()));
+        let mut graph = Graph::from_instances(
+            vec![
+                (
+                    "demux".into(),
+                    Box::new(Counted {
+                        inner: demux,
+                        stats: stats.clone(),
+                    }) as Box<dyn Component>,
+                ),
+                ("decode".into(), decoder),
+            ],
+            &[EdgeSpec::between("demux", "decode", Some(stream))],
+            engine.budget().clone(),
+            cancel,
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        graph.reset(1_798_000_000).unwrap();
+        let first = loop {
+            match graph.poll().unwrap() {
+                GraphEvent::Output { buffer, .. } => break buffer.header.info.pts_us().unwrap(),
+                GraphEvent::Pending => {
+                    assert!(started.elapsed().as_secs() < 10, "FLAC seek stalled")
+                }
+                GraphEvent::End => panic!("FLAC seek returned premature EOF"),
+            }
+        };
+        let stats = stats.borrow();
+        eprintln!(
+            "FLAC_SEEK {}",
+            json!({"fixture":name,"elapsed_ms":started.elapsed().as_secs_f64()*1000.,"first_pts_us":first,
+            "decoder_packets":stats.packets,"decoder_bytes":stats.bytes,"container_read_bytes":stats.container["bytes_read"].as_u64().unwrap()-initial["bytes_read"].as_u64().unwrap(),
+            "container_frames_validated":stats.container["frames_read"],"index_entries":stats.container["index_entries"]})
+        );
+        assert!(
+            (1_797_900_000..=1_798_000_000).contains(&first),
+            "decoded from the beginning: {first}"
+        );
+        assert!(
+            stats.packets <= 4,
+            "decoded {} preroll packets",
+            stats.packets
+        );
+        assert!(stats.container["index_entries"].as_u64().unwrap() <= 4096);
+    }
+}

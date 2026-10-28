@@ -33,7 +33,7 @@ HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/
 
 Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；本包不注册或调用其音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
 
-Windows MF FLAC source 在小块语料上接受非零 seek 却返回 EOF；当前 FLAC seek 保守地回到起点恢复解码，由 facade 裁到目标位置。长文件 seek 成本随目标位置增加，尚不承诺原生随机访问性能。
+本地原生 FLAC 使用自有的压缩帧定位层，补齐 Windows Source Reader 返回任意字节块及 macOS 可变块定位的缺口；逐帧 CRC 校验，优先 SEEKTABLE，无表时二分搜索并维护有上限的稀疏索引。解码仍是独立 Windows MFT / AudioToolbox 节点，不引入第三方 codec，也不缓存整段 PCM。
 
 系统路径已覆盖 MP3、AAC、FLAC、ALAC、WAV/常用 PCM、Opus，以及 macOS Vorbis；Dolby 取决于系统安装。不是所有 codec/profile、声道布局或历史格式都已认证。视频首批认证为 SDR 8-bit H.264 MP4/MKV；HEVC/VP8/VP9 依赖平台适配和系统能力，HDR、隔行、异步硬件 MFT 和共享 GPU surface 尚未接入。
 

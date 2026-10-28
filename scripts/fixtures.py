@@ -3,6 +3,8 @@
 import argparse
 import json
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 p = argparse.ArgumentParser()
 p.add_argument('--output', default='target/fixtures')
@@ -15,4 +17,5 @@ for source in (root / 'tests/fixtures').iterdir():
         shutil.copy2(source, out / source.name)
 request = dict(source=str(out / 'av.mp4'), task='probe', audio_rate=48000, audio_channels=2, hardware=False, threads=2, timeout_ms=3000, max_frame_bytes=134217728, max_packet_bytes=16777216)
 (out / 'probe.json').write_text(json.dumps(dict(component='fallback.demux', settings=request)))
+subprocess.run([sys.executable, str(root / 'scripts/flac-fixtures.py'), '--output', str(out)], check=True)
 print(out)

@@ -164,7 +164,7 @@ pub struct Demux {
     source: std::path::PathBuf,
     properties: Option<IPropertyStore>,
     mp3: BTreeMap<u32, (remdia_bitstream::mp3::Gapless, Option<i64>)>,
-    config: NodeConfig,
+    flac: Option<super::flac::Source>,
     _apartment: Apartment,
 }
 impl Demux {
@@ -293,19 +293,26 @@ impl Demux {
                     }
                 }
             }
+            let mut media = MediaInfo {
+                container: super::capabilities::container(&request.source)?.into(),
+                duration_us: duration,
+                origin_us: 0,
+                metadata,
+                tracks,
+            };
+            let flac = super::flac::Source::open(
+                &file_path,
+                &mut media,
+                request.max_packet_bytes,
+                control,
+            )?;
             Ok(Self {
                 reader,
                 info: NodeInfo {
                     input: None,
                     output: PortCaps::new(DataKind::Packet),
                     max_output_bytes: request.max_packet_bytes,
-                    media: Some(MediaInfo {
-                        container: super::capabilities::container(&request.source)?.into(),
-                        duration_us: duration,
-                        origin_us: 0,
-                        metadata,
-                        tracks,
-                    }),
+                    media: Some(media),
                 },
                 control,
                 generation: 1,
@@ -314,7 +321,7 @@ impl Demux {
                 source: file_path,
                 properties,
                 mp3,
-                config: config.clone(),
+                flac,
                 _apartment: apartment,
             })
         }
@@ -328,6 +335,9 @@ impl Component for Demux {
         self.control.check()?;
         if self.ended == self.selected {
             return Ok(Receive::End);
+        }
+        if let Some(flac) = &mut self.flac {
+            return flac.receive(self.generation, self.control);
         }
         unsafe {
             let mut stream = 0;
@@ -460,6 +470,9 @@ impl Component for Demux {
         }
     }
     fn command(&mut self, command: &serde_json::Value) -> Result<Option<MediaBuffer>> {
+        if command["op"] == "flac.stats" {
+            return Ok(self.flac.as_ref().map(|flac| flac.stats(self.generation)));
+        }
         if command["op"] != "artwork" {
             return Ok(None);
         }
@@ -535,25 +548,10 @@ impl Component for Demux {
     }
     fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
         self.control.check()?;
-        let flac = self
-            .info
-            .media
-            .as_ref()
-            .is_some_and(|media| media.tracks.iter().any(|track| track.codec == "flac"));
-        // MF FLAC seeks can report premature EOF, including a reset before the
-        // first sample has started streaming. A fresh compressed source starts
-        // at zero without depending on the handler's seek/flush state. Session
-        // clips the preroll at the target; long seeks deliberately cost a scan.
-        if flac {
-            let mut fresh = Self::open(&self.config, self.control)?;
-            let tracks =
-                |info: &NodeInfo| serde_json::to_value(&info.media.as_ref().unwrap().tracks);
-            ensure!(
-                tracks(&fresh.info)? == tracks(&self.info)?,
-                "system source tracks changed during seek"
-            );
-            fresh.generation = generation;
-            *self = fresh;
+        if let Some(flac) = &mut self.flac {
+            flac.seek(target, self.control)?;
+            self.generation = generation;
+            self.ended.clear();
             return Ok(());
         }
         let target = target

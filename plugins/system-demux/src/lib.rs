@@ -3,6 +3,8 @@
 mod apple;
 mod capabilities;
 #[cfg(any(windows, target_os = "macos"))]
+mod flac;
+#[cfg(any(windows, target_os = "macos"))]
 mod metadata;
 #[cfg(windows)]
 mod windows;
