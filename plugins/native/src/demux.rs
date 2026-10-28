@@ -422,7 +422,8 @@ impl Component for Demux {
             // download's missing prefix. Use byte/duration estimation remotely;
             // local files keep sample-accurate scanning. VBR remote seeks are
             // therefore approximate until a timestamped container/index exists.
-            let mode = if self.request.source.starts_with("http")
+            let mode = if (self.request.source.starts_with("http://")
+                || self.request.source.starts_with("https://"))
                 && matches!(self.format.format_info().short_name, "mp1" | "mp2" | "mp3")
             {
                 SeekMode::Coarse
