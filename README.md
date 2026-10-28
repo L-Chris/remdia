@@ -26,10 +26,9 @@ HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/
 | `image` | WIC 或 ImageIO/CoreGraphics 的 probe/decode/scale/crop/alpha/orient/tile/compose/encode 工厂 |
 | `fallback_demux` | Symphonia 仅用于系统容器缺口及现有 HTTP/Range/渐进 source 适配；不注册音频 decoder |
 | `fallback_vorbis` | 仅 Windows，未安装匹配同步 Vorbis MFT 时的窄解码器 |
-| `image_webp` | 仅 Windows，WIC WebP 未能通过实际激活测试时的窄 probe/decode；后续缩放、编码仍用 WIC |
 | `fallback_mp3_lame` | 16 kHz gapless MP3 请求缺口；macOS 无系统 MP3 encoder，Windows MFT 的原始 MP3 工厂与该请求契约分开判断 |
 
-已经移除 `image`、`fast_image_resize`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。Windows 的 Vorbis、WebP 可随系统扩展变化，运行时查询后再选择。WebP 窄回退当前不接受 ICC/EXIF metadata，需要相应系统 codec。
+已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。WebP 仅使用 WIC / ImageIO；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
 
 Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；本包不注册或调用其音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
 

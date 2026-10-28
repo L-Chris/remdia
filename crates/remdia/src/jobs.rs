@@ -52,7 +52,7 @@ impl Engine {
                     notes: session.plan().notes.clone(),
                 })
             }
-            MediaRequest::Image(request) => unsafe { request.resolved_plan(self) },
+            MediaRequest::Image(request) => request.plan(self),
         }
     }
     /// # Safety
@@ -108,7 +108,7 @@ impl Engine {
                 self.open(request, cancel)?
             }))),
             MediaRequest::Image(request) => {
-                let plan = unsafe { request.resolved_plan(self)? };
+                let plan = request.plan(self)?;
                 let input = request.input.buffers(request.max_input_bytes)?;
                 let graph = bound_graph(
                     self,

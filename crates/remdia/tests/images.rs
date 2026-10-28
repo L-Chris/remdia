@@ -124,8 +124,37 @@ fn image_metadata_limits_cancellation_and_alpha() {
 
 #[test]
 #[ignore = "requires staged system image plugins"]
-fn webp_uses_the_system_codec_or_narrow_fallback_and_keeps_pixel_values() {
+fn webp_uses_only_the_installed_system_codec_or_reports_absence() {
     let engine = engine();
+    let caps = unsafe { engine.image_capabilities().unwrap() };
+    let supported = caps["decode"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|format| format == "org.webmproject.webp");
+    let request = MediaRequest::Image(ImageRequest::new(
+        ImageInput::Bytes(
+            include_bytes!("../../../tests/fixtures/legacy-white.webp")
+                .as_slice()
+                .into(),
+        ),
+        vec![Op::new("decode", json!({}))],
+    ));
+    let plan = unsafe { engine.explain_job(&request).unwrap() };
+    assert!(
+        plan.graph
+            .nodes
+            .iter()
+            .all(|node| !node.config.component.starts_with("fallback."))
+    );
+    if !supported {
+        let mut session = unsafe { engine.open_job(request, Cancellation::default()).unwrap() };
+        assert!(
+            session.read().is_err(),
+            "missing system codec unexpectedly decoded WebP"
+        );
+        return;
+    }
     let frames = run(
         &engine,
         ImageInput::Bytes(

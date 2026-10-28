@@ -12,9 +12,10 @@ root = Path(__file__).resolve().parent.parent
 names = re.findall(r'^name = "([^"]+)"$', (root / 'Cargo.lock').read_text(), re.M)
 for name in names:
     assert 'ffmpeg' not in name.lower(), name
+    assert name != 'image-webp', name
 files = list(Path(a.directory).rglob('*'))
 for path in files:
-    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', path.name, re.I), path
+    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale|image[_-]webp)', path.name, re.I), path
 def imports(path):
     data = path.read_bytes()
     def u16(n): return struct.unpack_from('<H', data, n)[0]

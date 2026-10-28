@@ -436,6 +436,36 @@ fn windows_system_wav_pcm() {
 #[ignore = "requires staged Windows system audio plugins"]
 fn windows_system_mp3_encoder_emits_a_decodable_bitstream() {
     let engine = engine();
+    let capabilities = engine
+        .capability_value(
+            "windows.audio.capabilities",
+            json!({"operation":"encode"}),
+            Cancellation::default(),
+        )
+        .unwrap();
+    eprintln!("SYSTEM_MP3_ENCODER_CAPABILITIES {capabilities}");
+    for rate in [16000, 22050, 24000, 32000, 44100, 48000] {
+        let result = TrustedFactory(engine.registry()).create(
+            &NodeConfig {
+                component: "windows.mp3.encode".into(),
+                settings: json!({"rate":rate,"channels":1}),
+            },
+            Cancellation::default(),
+        );
+        eprintln!(
+            "SYSTEM_MP3_ENCODER_PROFILE rate={rate} accepted={} error={:?}",
+            result.is_ok(),
+            result.as_ref().err().map(|error| format!("{error:#}"))
+        );
+        assert_eq!(
+            result.is_ok(),
+            capabilities["mp3_input_rates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == rate)
+        );
+    }
     let mut encoder = TrustedFactory(engine.registry())
         .create(
             &NodeConfig {

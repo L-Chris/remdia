@@ -17,11 +17,6 @@ Separately replaceable compatibility packs use:
   remain in Cargo.lock; no audio decoder is registered or created in this pack.
   On Windows only, `fallback_vorbis` registers the narrow Vorbis decoder when
   no compatible synchronous system Vorbis MFT is installed.
-- **image-webp 0.2.4 (MIT OR Apache-2.0)**,
-  https://github.com/image-rs/image-webp : Windows-only `image_webp` probe/decode
-  fallback when WIC WebP activation is unavailable. WIC still performs transforms
-  and encoding. ICC/EXIF-tagged fallback inputs are currently rejected. The same
-  decoder is a development-only buffer-contract test dependency on other hosts.
 - **mp3lame-encoder 0.2.5 / mp3lame-sys 0.1.11 (LGPL-3.0), LAME 3.100**,
   https://github.com/DoumanAsh/mp3lame-encoder and
   https://github.com/DoumanAsh/mp3lame-sys : `fallback_mp3_lame` supplies the

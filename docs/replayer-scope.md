@@ -28,11 +28,10 @@ remain application responsibilities.
 Package the exact pinned SDK revision, all platform manifests/libraries and its
 notices. macOS uses native, macos, image, system_audio, system_demux,
 fallback_demux and fallback_mp3_lame. Windows uses native, windows, image,
-system_audio, system_demux, fallback_demux, fallback_mp3_lame, fallback_vorbis
-and image_webp. Each compatibility component is selected only for its declared
+system_audio, system_demux, fallback_demux, fallback_mp3_lame and fallback_vorbis. Each compatibility component is selected only for its declared
 source/format/profile gap. System failures do not trigger generic codec retries.
 
 Certification targets Windows x64 and macOS 15+ arm64/x86_64, common music and
-SDR H.264 MP4/MKV, old PNG/WebP image caches, seek/reset/EOF, progressive reads
+SDR H.264 MP4/MKV, PNG image caches and WebP caches where a system codec is installed, seek/reset/EOF, progressive reads
 and relocated packages. Historical FFmpeg format parity, HDR, shared GPU
 surfaces and every legacy audio profile are not claimed.

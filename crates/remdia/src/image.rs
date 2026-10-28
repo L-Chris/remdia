@@ -80,21 +80,6 @@ pub enum ImageInput {
     Sequence(Vec<Image>),
 }
 impl ImageInput {
-    fn is_webp(&self) -> bool {
-        let mut header = [0u8; 12];
-        let bytes = match self {
-            Self::Bytes(bytes) => bytes.get(..12),
-            Self::File(path) => {
-                use std::io::Read;
-                std::fs::File::open(path)
-                    .ok()
-                    .and_then(|mut f| f.read_exact(&mut header).ok())
-                    .map(|_| header.as_slice())
-            }
-            _ => None,
-        };
-        bytes.is_some_and(|b| &b[..4] == b"RIFF" && &b[8..12] == b"WEBP")
-    }
     pub(crate) fn buffers(self, limit: usize) -> Result<Vec<MediaBuffer>> {
         let data = match self {
             Self::Pixels(image) => return Ok(vec![image.0]),
@@ -163,49 +148,6 @@ impl ImageRequest {
             timeout_ms: 30_000,
             policy: ProviderPolicy::SystemPreferred,
         }
-    }
-    pub(crate) unsafe fn resolved_plan(&self, engine: &Engine) -> Result<JobPlan> {
-        let mut plan = self.plan(engine)?;
-        if cfg!(windows) && self.policy == ProviderPolicy::SystemPreferred && self.input.is_webp() {
-            let caps = unsafe { engine.image_capabilities()? };
-            if !caps["decode"]
-                .as_array()
-                .is_some_and(|list| list.iter().any(|x| x == "org.webmproject.webp"))
-            {
-                let old_edges = std::mem::take(&mut plan.graph.edges);
-                let _ = old_edges;
-                let mut nodes = Vec::new();
-                for mut node in plan.graph.nodes {
-                    let op = node.config.component.rsplit('.').next().unwrap().to_owned();
-                    if matches!(op.as_str(), "decode" | "probe") {
-                        node.config.component = format!("fallback.webp.{op}");
-                        engine.registry.select(&node.config.component).context(
-                            "WIC WebP unavailable and optional WebP fallback is missing",
-                        )?;
-                        if op == "decode" {
-                            let settings = node.config.settings.clone();
-                            let id = format!("{}_size", node.id);
-                            nodes.push(node);
-                            nodes.push(graph::NodeSpec {id,config:NodeConfig {component:"windows.image.scale".into(),settings:json!({"width":settings["max_width"].as_u64().unwrap_or(16384),"height":settings["max_height"].as_u64().unwrap_or(65536),"max_pixels":settings["max_pixels"].as_u64().unwrap_or(64*1024*1024),"fit":true})}});
-                            continue;
-                        }
-                    }
-                    nodes.push(node);
-                }
-                let edges = nodes
-                    .windows(2)
-                    .map(|pair| {
-                        let mut edge = EdgeSpec::between(&pair[0].id, &pair[1].id, None);
-                        edge.max_bytes = engine.budget.limit();
-                        edge.max_buffers = 2;
-                        edge
-                    })
-                    .collect();
-                plan.graph = GraphSpec { nodes, edges };
-                plan.notes.push("WIC has no WebP decoder: use the narrow WebP decoder, retaining system transforms/encoding".into());
-            }
-        }
-        Ok(plan)
     }
     pub(crate) fn plan(&self, engine: &Engine) -> Result<JobPlan> {
         ensure!(

@@ -41,7 +41,6 @@ for pack, capabilities in [
     ('windows', ['windows.video.decode']),
     ('macos', ['macos.video.decode']),
     ('image', [f'{os_name}.image.{op}' for op in ['decode', 'probe', 'from_video', 'scale', 'crop', 'alpha', 'orient', 'tile', 'compose', 'encode', 'capabilities']]),
-    ('image_webp', ['fallback.webp.decode', 'fallback.webp.probe']),
     ('system_demux', [f'{os_name}.demux', f'{os_name}.demux.capabilities']),
     ('system_audio', [f'{os_name}.audio.decode', f'{os_name}.audio.resample', f'{os_name}.audio.capabilities'] + (['windows.mp3.encode'] if os_name == 'windows' else [])),
 ]:
@@ -53,8 +52,6 @@ for pack, capabilities in [
         continue
     if pack == 'system_audio' and os_name not in ('windows', 'macos'):
         continue
-    if pack == 'image_webp' and os_name != 'windows':
-        continue
     if pack == 'image' and os_name not in ('windows', 'macos'):
         continue
     if pack in ('windows', 'macos') and pack != os_name:
@@ -64,6 +61,10 @@ for pack, capabilities in [
     (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, abi_minor=2, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
 # Reject stale compatibility manifests when staging over an older build.
 for old in plugins.glob('*ffmpeg*'):
+    old.unlink()
+for name in ('image_webp.json', 'remdia_backend_image_webp.dll', 'libremdia_backend_image_webp.dylib', 'libremdia_backend_image_webp.so'):
+    (plugins / name).unlink(missing_ok=True)
+for old in (out / 'licenses').glob('image-webp-*'):
     old.unlink()
 for name in ['README.md', 'LICENSE', 'THIRD_PARTY.md']:
     if (root / name).exists():

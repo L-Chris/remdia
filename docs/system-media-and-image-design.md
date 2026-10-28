@@ -149,7 +149,7 @@ AI 分段与 overlap 位置由 replayer 决定，remdia 只执行明确的 rect/
 - 保持当前预览上限 16M 输出像素、tile 高度 2048 的使用体验，并保留可配置预算；tile 使用共享只读底图视图或按 tile 输出，避免分块时再复制完整底图。
 - 译图 canvas 和 patches 纳入峰值预算；首版超过预算明确失败，不为了成功偷偷创建数 GiB 中间位图。
 - OS 同步调用不能总被立即取消，优先缩小调用块并在调用前后检查 token；过期 generation 结果不上传 UI。
-- 缓存由应用管理；key 加入 operation、像素/alpha/色彩策略和实现版本。原有 PNG/WebP/JPEG 译图缓存继续可读，不触发付费重译。
+- 缓存由应用管理；key 加入 operation、像素/alpha/色彩策略和实现版本。原有 PNG/JPEG 译图缓存继续可读；WebP 缓存仅在系统具备对应 codec 时可读。系统不支持 WebP 时直接报错，不自动触发付费重译。
 
 ## API/ABI 演进
 
@@ -173,7 +173,8 @@ AI 分段与 overlap 位置由 replayer 决定，remdia 只执行明确的 rect/
 | libopus | 先测两平台系统 Opus；本机已枚举到，不能继续无条件打包 |
 | LAME | Windows 优先系统 MP3 encoder；macOS 当前枚举缺失，作为 macOS MP3 编码的窄 fallback 候选 |
 | h264-reader / scuffle-h265 | 优先系统 format description/重排信息；如果现有 reorder 正确性仍需头解析，保留小型 parser，待证明可替代再移除 |
-| WebP / Vorbis 等补充实现 | 仅在必需用例、最低 OS/干净安装矩阵证明缺失后选最小实现，不默认恢复大型通用 image/audio 栈 |
+| WebP | 仅使用系统 codec，缺失时报不支持；不携带第三方解码器 |
+| Vorbis 等补充实现 | 仅在必需用例、最低 OS/干净安装矩阵证明缺失后选最小实现，不默认恢复大型通用 audio 栈 |
 
 独立 fallback 具有独立 manifest、平台构建开关、许可证清单和可审计依赖；未选用的平台/能力不编译也不打包。
 提供 system-only 认证配置和 replayer 的明确 compatibility 发布配置，优先级不能替代物理拆包。
@@ -202,7 +203,7 @@ AI 分段与 overlap 位置由 replayer 决定，remdia 只执行明确的 rect/
 ### P1：图片 SDK 和 replayer 图片迁移
 
 完成图像模型、WIC/ImageIO pack、JPEG/PNG/WebP 读取与 JPEG/PNG 输出、变换与 tiles、预算、CLI 和 C ABI 测试。
-WebP 不可用的平台按 P0 决定窄 fallback；不以丢掉旧 WebP 缓存兼容性换取依赖减少。
+WebP 不可用的平台返回不支持；按更新后的用户要求移除第三方 WebP fallback，旧 WebP 缓存依赖已安装的系统 codec。
 迁移全部 replayer 图片调用，并删除应用自己的图片 codec 库。先让用户看到可验证的依赖收敛。
 
 ### P2：音频系统化
