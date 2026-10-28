@@ -35,7 +35,7 @@ copy_binary(build / exe, out / exe)
 for pack, capabilities in [
     ('native', ['native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.packet.copy', 'native.mp3.mux', 'native.file.sink']),
     ('fallback_demux', ['fallback.demux']),
-    ('fallback_opus_vorbis', ['fallback.opus.decode','fallback.vorbis.decode']),
+    ('fallback_vorbis', ['fallback.vorbis.decode']),
     ('fallback_mp3_lame', ['fallback.mp3.encode']),
     ('windows', ['windows.video.decode']),
     ('macos', ['macos.video.decode']),
@@ -44,9 +44,9 @@ for pack, capabilities in [
     ('system_demux', [f'{os_name}.demux', f'{os_name}.demux.capabilities']),
     ('system_audio', [f'{os_name}.audio.decode', f'{os_name}.audio.resample', f'{os_name}.audio.capabilities'] + (['windows.mp3.encode'] if os_name == 'windows' else [])),
 ]:
-    if pack == 'fallback_opus_vorbis' and os_name != 'windows':
+    if pack == 'fallback_vorbis' and os_name != 'windows':
         continue
-    if pack == 'fallback_mp3_lame' and os_name != 'macos':
+    if pack == 'fallback_mp3_lame' and os_name not in ('macos', 'windows'):
         continue
     if pack == 'system_demux' and os_name not in ('macos', 'windows'):
         continue

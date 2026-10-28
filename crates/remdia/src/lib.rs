@@ -204,7 +204,11 @@ impl Engine {
             && info.tracks.iter().any(|t| t.kind == "audio")
             && self.registry.select(&audio_component).is_ok()
         {
-            self.capability_value(&audio_component, json!({}), cancel.clone())?
+            self.capability_value(
+                &audio_component,
+                json!({"operation":"decode"}),
+                cancel.clone(),
+            )?
         } else {
             serde_json::Value::Null
         };
@@ -263,17 +267,27 @@ fn encode_pcm_mp3(
     );
     cancel.begin();
     let registry = Registry::discover(directory)?;
-    ensure!(
-        cfg!(windows) || policy != ProviderPolicy::SystemOnly,
-        "system MP3 encoding is unavailable on this platform"
-    );
     let engine = Engine {
         registry,
         budget: budget.clone(),
     };
-    let component = if cfg!(windows) {
+    let caps = engine.capability_value(
+        &format!("{}.audio.capabilities", std::env::consts::OS),
+        json!({"operation":"encode"}),
+        cancel.clone(),
+    )?;
+    let available = cfg!(windows)
+        && caps["mp3_gapless"] == true
+        && caps["mp3_input_rates"]
+            .as_array()
+            .is_some_and(|rates| rates.iter().any(|rate| rate == 16000));
+    let component = if available {
         "windows.mp3.encode"
     } else {
+        ensure!(
+            policy != ProviderPolicy::SystemOnly,
+            "system MP3 encoder does not support the 16-kHz gapless request profile"
+        );
         "fallback.mp3.encode"
     };
     let spec = GraphSpec {

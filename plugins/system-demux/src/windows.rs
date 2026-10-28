@@ -189,7 +189,19 @@ impl Demux {
             let attributes = attributes.context("missing source attributes")?;
             attributes.SetUINT32(&MF_READWRITE_DISABLE_CONVERTERS, 1)?;
             attributes.SetUINT32(&MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, 0)?;
-            let reader = MFCreateSourceReaderFromURL(PCWSTR(source.as_ptr()), &attributes)?;
+            let stream = MFCreateFile(
+                MF_ACCESSMODE_READ,
+                MF_OPENMODE_FAIL_IF_NOT_EXIST,
+                MF_FILEFLAGS_NONE,
+                PCWSTR(source.as_ptr()),
+            )?;
+            let stream_attributes: IMFAttributes = stream.cast()?;
+            let mime = super::capabilities::mime(&request.source)?;
+            if !mime.is_empty() {
+                let value = mime.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+                stream_attributes.SetString(&MF_BYTESTREAM_CONTENT_TYPE, PCWSTR(value.as_ptr()))?;
+            }
+            let reader = MFCreateSourceReaderFromByteStream(&stream, &attributes)?;
             reader.SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS.0 as u32, false)?;
             let mut tracks = Vec::new();
             let mut selected = BTreeSet::new();

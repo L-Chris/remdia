@@ -21,7 +21,7 @@ impl Encoder {
     pub fn new(config: &NodeConfig) -> Result<Self> {
         let apartment = Apartment::new()?;
         startup()?;
-        let rate = u32::try_from(config.settings["rate"].as_u64().unwrap_or(16000))?;
+        let rate = u32::try_from(config.settings["rate"].as_u64().unwrap_or(32000))?;
         let channels = u16::try_from(config.settings["channels"].as_u64().unwrap_or(1))?;
         ensure!(
             matches!(rate, 16000 | 22050 | 24000 | 32000 | 44100 | 48000)
@@ -31,22 +31,32 @@ impl Encoder {
         unsafe {
             let transform: IMFTransform =
                 CoCreateInstance(&MP3ACMCodecWrapper, None, CLSCTX_INPROC_SERVER)?;
-            let output = MFCreateMediaType()?;
-            output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-            output.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_MP3)?;
-            output.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)?;
-            output.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, u32::from(channels))?;
-            output.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 8000)?;
-            let block = if rate >= 32000 {
-                144 * 64000 / rate
-            } else {
-                72 * 64000 / rate
-            };
-            let mut extra = vec![1, 0, 2, 0, 0, 0];
-            extra.extend_from_slice(&(block as u16).to_le_bytes());
-            extra.extend_from_slice(&[1, 0, 0, 0]);
-            output.SetBlob(&MF_MT_USER_DATA, &extra)?;
-            transform.SetOutputType(0, &output, 0)?;
+            let mut selected = None;
+            for index in 0..1024 {
+                let format = match transform.GetOutputAvailableType(0, index) {
+                    Ok(format) => format,
+                    Err(error) if error.code() == MF_E_NO_MORE_TYPES => break,
+                    Err(error) => return Err(error).context("enumerate system MP3 output"),
+                };
+                if format.GetGUID(&MF_MT_SUBTYPE)? == MFAudioFormat_MP3
+                    && format.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)? == rate
+                    && format.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? == u32::from(channels)
+                {
+                    let preferred = format.GetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND)? == 8000;
+                    if selected.is_none() || preferred {
+                        selected = Some(format);
+                    }
+                    if preferred {
+                        break;
+                    }
+                }
+            }
+            let output = selected
+                .ok_or_else(|| windows::core::Error::from_hresult(MF_E_INVALIDMEDIATYPE))
+                .with_context(|| format!("no advertised system MP3 profile at {rate} Hz"))?;
+            transform
+                .SetOutputType(0, &output, 0)
+                .with_context(|| format!("configure system MP3 output at {rate} Hz"))?;
             let input = MFCreateMediaType()?;
             input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
             input.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
@@ -58,7 +68,9 @@ impl Encoder {
                 &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
                 rate * u32::from(channels) * 2,
             )?;
-            transform.SetInputType(0, &input, 0)?;
+            transform
+                .SetInputType(0, &input, 0)
+                .with_context(|| format!("configure system MP3 PCM at {rate} Hz"))?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             let mut input = PortCaps::new(DataKind::Audio);
@@ -217,4 +229,27 @@ impl Component for Encoder {
     fn reset(&mut self, _generation: u64, _target: i64) -> Result<()> {
         anyhow::bail!("create a new graph to reset an MP3 encoder")
     }
+}
+
+pub fn supported_rates() -> Result<Vec<u32>> {
+    let mut rates = Vec::new();
+    for rate in [16000, 22050, 24000, 32000, 44100, 48000] {
+        let config = NodeConfig {
+            component: "windows.mp3.encode".into(),
+            settings: serde_json::json!({"rate":rate,"channels":1}),
+        };
+        match Encoder::new(&config) {
+            Ok(_) => rates.push(rate),
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<windows::core::Error>()
+                        .is_some_and(|error| {
+                            matches!(error.code(), MF_E_INVALIDMEDIATYPE | MF_E_NO_MORE_TYPES)
+                        })
+                }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(rates)
 }

@@ -203,3 +203,28 @@ fn system_only_playback_does_not_require_a_compatibility_pack() {
             .is_err()
     );
 }
+
+#[test]
+#[ignore = "requires staged system media plugins"]
+fn system_file_source_uses_content_instead_of_temporary_file_extension() {
+    let engine = Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let directory = root.join("../../target/system-tests");
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join(format!("system-source-{}.part", std::process::id()));
+    std::fs::copy(root.join("../../tests/fixtures/audio.wav"), &source).unwrap();
+    let mut request = Request::playback(source.to_str().unwrap());
+    request.policy = crate::ProviderPolicy::SystemOnly;
+    request.task = crate::Task::Audio;
+    let mut session = unsafe { engine.open(request, Cancellation::default()).unwrap() };
+    assert!(matches!(
+        session.read().unwrap().unwrap().info(),
+        FrameInfo::Audio { .. }
+    ));
+    drop(session);
+    std::fs::remove_file(source).unwrap();
+}

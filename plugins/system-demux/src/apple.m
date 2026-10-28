@@ -101,9 +101,11 @@ static int start(RmReader *state,int64_t target) {
  }
  return [state.reader startReading]?0:fail(state.reader.error.description);
 }
-int rm_demux_open(const char *path,void **reader,char **metadata) { @autoreleasepool {
+int rm_demux_open(const char *path,const char *mime,void **reader,char **metadata) { @autoreleasepool {
  *reader=NULL;*metadata=NULL;RmReader *state=[RmReader new];
- state.asset=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(path)] options:@{AVURLAssetPreferPreciseDurationAndTimingKey:@YES}];
+ NSMutableDictionary *options=[@{AVURLAssetPreferPreciseDurationAndTimingKey:@YES} mutableCopy];
+ if(mime&&mime[0])options[AVURLAssetOverrideMIMETypeKey]=@(mime);
+ state.asset=[AVURLAsset URLAssetWithURL:[NSURL fileURLWithPath:@(path)] options:options];
  NSMutableArray *tracks=[NSMutableArray array],*descriptions=[NSMutableArray array];
  NSMutableDictionary *tags=[NSMutableDictionary dictionary];
  for(AVMetadataItem *item in state.asset.commonMetadata) {

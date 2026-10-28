@@ -16,7 +16,6 @@ pub fn codec_registry() -> &'static CodecRegistry {
     REGISTRY.get_or_init(|| {
         let mut registry = CodecRegistry::new();
         registry.register_audio_decoder::<symphonia_codec_vorbis::VorbisDecoder>();
-        registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
         registry
     })
 }
@@ -53,7 +52,6 @@ impl Decoder {
         );
         let wire: Wire = serde_json::from_value(track.initialization.clone())?;
         let codec = match track.codec.as_str() {
-            "opus" => symphonia_core::codecs::audio::well_known::CODEC_ID_OPUS,
             "vorbis" => symphonia_core::codecs::audio::well_known::CODEC_ID_VORBIS,
             _ => anyhow::bail!("codec is outside this narrow fallback"),
         };
@@ -156,30 +154,6 @@ impl Component for Decoder {
         timestamp = timestamp
             .checked_add((u128::from(trim_start) * 1_000_000 / u128::from(rate)) as i64)
             .context("trim timestamp overflow")?;
-        if self.track.codec == "opus" {
-            let playable = time_base
-                .rescale(
-                    i64::try_from(duration)?,
-                    Rational {
-                        num: 1,
-                        den: rate as i32,
-                    },
-                )?
-                .max(0) as u64;
-            let implicit = playable.saturating_sub(frames as u64);
-            let shift = if self.track.initialization["container"] == "ogg" {
-                let extra: Vec<u8> =
-                    serde_json::from_value(self.track.initialization["extra_data"].clone())?;
-                ensure!(extra.len() >= 19, "invalid OpusHead");
-                u64::from(u16::from_le_bytes([extra[10], extra[11]]))
-            } else {
-                0
-            };
-            timestamp = i64::try_from(
-                i128::from(timestamp)
-                    + (i128::from(implicit) - i128::from(shift)) * 1_000_000 / i128::from(rate),
-            )?;
-        }
         let info = FrameInfo::Audio {
             pts_us: timestamp,
             rate,

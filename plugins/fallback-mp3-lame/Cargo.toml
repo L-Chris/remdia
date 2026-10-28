@@ -14,5 +14,5 @@ serde_json.workspace = true
 remdia-graph.workspace = true
 remdia-plugin-abi.workspace = true
 
-[target.'cfg(target_os="macos")'.dependencies]
+[target.'cfg(any(windows,target_os="macos"))'.dependencies]
 mp3lame-encoder = { version = "0.2.5", features = ["std"] }

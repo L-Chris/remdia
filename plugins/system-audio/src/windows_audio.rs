@@ -102,6 +102,8 @@ pub struct Decoder {
     trace: bool,
     private_skip: usize,
     timestamp_shift: i64,
+    anchor: Option<i64>,
+    emitted: u64,
     _apartment: Apartment,
 }
 impl Decoder {
@@ -238,6 +240,8 @@ impl Decoder {
                 trace: config.settings["trace"].as_bool().unwrap_or(false),
                 private_skip: pre_skip,
                 timestamp_shift,
+                anchor: None,
+                emitted: 0,
                 _apartment: apartment,
             };
             decoder.refresh_format()?;
@@ -497,6 +501,9 @@ impl Component for Decoder {
                     self.seen_input = true;
                     self.discontinuity = false;
                     self.generation = input.header.generation;
+                    if self.anchor.is_none() {
+                        self.anchor = Some(time_base.rescale(pts, Rational::MICROS)?);
+                    }
                     if self.next_pts.is_none() {
                         self.next_pts = Some(time_base.rescale(pts, Rational::MICROS)?);
                     }
@@ -583,10 +590,17 @@ impl Component for Decoder {
             let Some(sample) = sample else {
                 return Ok(Receive::NeedInput);
             };
-            let timestamp = sample
-                .GetSampleTime()
-                .map(|pts| pts / 10)
-                .unwrap_or(self.next_pts.unwrap_or(0));
+            let timestamp = if matches!(self.track.codec.as_str(), "flac" | "alac") {
+                i64::try_from(
+                    i128::from(self.anchor.unwrap_or(0))
+                        + i128::from(self.emitted) * 1_000_000 / i128::from(self.rate),
+                )?
+            } else {
+                sample
+                    .GetSampleTime()
+                    .map(|pts| pts / 10)
+                    .unwrap_or(self.next_pts.unwrap_or(0))
+            };
             let buffer = sample.ConvertToContiguousBuffer()?;
             let len = buffer.GetCurrentLength()? as usize;
             ensure!(
@@ -640,6 +654,10 @@ impl Component for Decoder {
                 return self.packet_output(bytes);
             }
             let samples = bytes.len() / usize::from(self.channels) / 4;
+            self.emitted = self
+                .emitted
+                .checked_add(samples as u64)
+                .context("decoded sample count overflow")?;
             self.next_pts =
                 Some(timestamp + (samples as i128 * 1_000_000 / i128::from(self.rate)) as i64);
             Ok(Receive::Output(MediaBuffer::new(
@@ -678,6 +696,8 @@ impl Component for Decoder {
         self.draining = false;
         self.discontinuity = true;
         self.next_pts = None;
+        self.anchor = None;
+        self.emitted = 0;
         self.stamps.clear();
         self.pending.clear();
         self.first = true;
@@ -694,7 +714,7 @@ impl Component for Decoder {
     }
 }
 
-pub fn capabilities() -> Result<serde_json::Value> {
+pub fn capabilities(encoding: bool) -> Result<serde_json::Value> {
     let _apartment = Apartment::new()?;
     startup()?;
     let mut decode = Vec::new();
@@ -721,7 +741,16 @@ pub fn capabilities() -> Result<serde_json::Value> {
         }
     }
     decode.extend(["pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"]);
+    let mp3_encode = unsafe {
+        CoCreateInstance::<_, IMFTransform>(&MP3ACMCodecWrapper, None, CLSCTX_INPROC_SERVER)
+    }
+    .is_ok();
+    let rates = if mp3_encode && encoding {
+        super::windows_encode::supported_rates()?
+    } else {
+        vec![]
+    };
     Ok(
-        serde_json::json!({"decode":decode,"resample":unsafe {CoCreateInstance::<_,IMFTransform>(&CResamplerMediaObject,None,CLSCTX_INPROC_SERVER)}.is_ok(),"mp3_encode":unsafe {CoCreateInstance::<_,IMFTransform>(&MP3ACMCodecWrapper,None,CLSCTX_INPROC_SERVER)}.is_ok()}),
+        serde_json::json!({"decode":decode,"resample":unsafe {CoCreateInstance::<_,IMFTransform>(&CResamplerMediaObject,None,CLSCTX_INPROC_SERVER)}.is_ok(),"mp3_encode":mp3_encode,"mp3_input_rates":rates,"mp3_gapless":false}),
     )
 }

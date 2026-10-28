@@ -56,7 +56,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
 }
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     if config.component == format!("{}.audio.capabilities", std::env::consts::OS) {
-        return Ok(Box::new(capabilities::Capabilities::new()?));
+        return Ok(Box::new(capabilities::Capabilities::new(config)?));
     }
     let _ = control;
     #[cfg(target_os = "macos")]

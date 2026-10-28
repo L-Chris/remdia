@@ -339,7 +339,7 @@ fn windows_decode_fixture(name: &str, expected: usize) {
                 id: "decode".into(),
                 config: NodeConfig {
                     component: "windows.audio.decode".into(),
-                    settings: json!({"track":track,"trace":name=="cover.flac"}),
+                    settings: json!({"track":track}),
                 },
             },
         ],
@@ -365,6 +365,7 @@ fn windows_decode_fixture(name: &str, expected: usize) {
     let mut total = 0;
     let mut first = None;
     let mut last = None;
+    let mut previous: Option<i64> = None;
     for attempts in 0..10000 {
         assert!(attempts < 9999, "{name} stalled");
         match graph.poll().unwrap() {
@@ -372,9 +373,22 @@ fn windows_decode_fixture(name: &str, expected: usize) {
             GraphEvent::Pending => {}
             GraphEvent::Output { buffer, .. } => {
                 if let FrameInfo::Audio {
-                    samples, pts_us, ..
+                    samples,
+                    pts_us,
+                    rate,
+                    ..
                 } = buffer.header.info
                 {
+                    if let Some(end) = previous {
+                        assert!(
+                            (pts_us - end).abs() <= 2,
+                            "{name}: PCM gap at {pts_us} after {end}"
+                        );
+                    } else {
+                        assert_eq!(pts_us, 0, "{name}");
+                    }
+                    previous =
+                        Some(pts_us + (samples as u128 * 1_000_000 / u128::from(rate)) as i64);
                     total += samples;
                     first.get_or_insert((samples, pts_us));
                     last = Some((samples, pts_us));
@@ -426,12 +440,12 @@ fn windows_system_mp3_encoder_emits_a_decodable_bitstream() {
         .create(
             &NodeConfig {
                 component: "windows.mp3.encode".into(),
-                settings: json!({"rate":16000,"channels":1}),
+                settings: json!({"rate":32000,"channels":1}),
             },
             Cancellation::default(),
         )
         .unwrap();
-    let input = pcm(32000, 16000, 1, 0, 1);
+    let input = pcm(64000, 32000, 1, 0, 1);
     assert_eq!(encoder.submit(&input).unwrap(), Submit::Accepted);
     encoder.drain().unwrap();
     let mut bytes = Vec::new();

@@ -6,7 +6,7 @@ typedef struct {
     uint64_t trim_start, trim_end;
     int keyframe;
 } RmPacket;
-int rm_demux_open(const char *path, void **reader, char **metadata);
+int rm_demux_open(const char *path, const char *mime, void **reader, char **metadata);
 int rm_demux_read(void *reader, size_t limit, RmPacket *out);
 int rm_demux_seek(void *reader, int64_t target_us);
 int rm_demux_artwork(void *reader, size_t limit, uint8_t **data, size_t *size);

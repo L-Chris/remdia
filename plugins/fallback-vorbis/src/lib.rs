@@ -1,4 +1,4 @@
-//! Narrow Windows fallbacks selected only when the system decoder is unavailable.
+//! Narrow Windows fallback selected only when the system decoder is unavailable.
 #[cfg(windows)]
 mod audio;
 use anyhow::Result;
@@ -7,7 +7,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
     if !cfg!(windows) {
         return vec![];
     }
-    ["opus", "vorbis"]
+    ["vorbis"]
         .into_iter()
         .map(|codec| ComponentDescriptor {
             id: format!("fallback.{codec}.decode"),
@@ -20,10 +20,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     let _ = control;
     #[cfg(windows)]
-    if matches!(
-        config.component.as_str(),
-        "fallback.opus.decode" | "fallback.vorbis.decode"
-    ) {
+    if matches!(config.component.as_str(), "fallback.vorbis.decode") {
         anyhow::ensure!(
             config.settings["track"]["codec"]
                 .as_str()

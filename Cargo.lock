@@ -884,15 +884,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e036b411754132fd6b74e94b74e9a13c5cf606fa93d1885c35860d3060820b1"
 
 [[package]]
-name = "opusic-sys"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8534a2ed5b65350f90c63b3e160a8edd8b812fcf3182a88fd7fcee3b6fca673a"
-dependencies = [
- "cmake",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1076,7 +1067,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "remdia-backend-fallback-opus-vorbis"
+name = "remdia-backend-fallback-vorbis"
 version = "0.3.0"
 dependencies = [
  "anyhow",
@@ -1084,7 +1075,6 @@ dependencies = [
  "remdia-plugin-abi",
  "serde",
  "serde_json",
- "symphonia-adapter-libopus",
  "symphonia-codec-vorbis",
  "symphonia-core",
 ]
@@ -1582,17 +1572,6 @@ dependencies = [
  "symphonia-format-ogg",
  "symphonia-format-riff",
  "symphonia-metadata",
-]
-
-[[package]]
-name = "symphonia-adapter-libopus"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6febe6f88f9a9483db7e5b72a2dad916d8f8eb588d18905a39c861319fc7fa1"
-dependencies = [
- "log",
- "opusic-sys",
- "symphonia-core",
 ]
 
 [[package]]

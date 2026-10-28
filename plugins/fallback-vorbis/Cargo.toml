@@ -1,5 +1,5 @@
 [package]
-name = "remdia-backend-fallback-opus-vorbis"
+name = "remdia-backend-fallback-vorbis"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,4 +18,3 @@ remdia-plugin-abi.workspace = true
 serde.workspace=true
 symphonia-core="0.6.1"
 symphonia-codec-vorbis="0.6.1"
-symphonia-adapter-libopus="0.3"

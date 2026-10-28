@@ -19,6 +19,7 @@ unsafe extern "C" {
     fn rm_demux_supports(kind: *const c_char) -> i32;
     fn rm_demux_open(
         path: *const c_char,
+        mime: *const c_char,
         reader: *mut *mut c_void,
         metadata: *mut *mut c_char,
     ) -> i32;
@@ -86,6 +87,7 @@ impl Demux {
             "system demux currently requires a local file source"
         );
         let path = std::path::Path::new(&request.source).canonicalize()?;
+        let mime = CString::new(super::capabilities::mime(&request.source)?)?;
         let source = path.clone();
         let path = CString::new(
             path.to_str()
@@ -93,7 +95,7 @@ impl Demux {
         )?;
         let mut reader = std::ptr::null_mut();
         let mut metadata = std::ptr::null_mut();
-        status(unsafe { rm_demux_open(path.as_ptr(), &mut reader, &mut metadata) })?;
+        status(unsafe { rm_demux_open(path.as_ptr(), mime.as_ptr(), &mut reader, &mut metadata) })?;
         ensure!(
             !reader.is_null() && !metadata.is_null(),
             "missing system demux result"

@@ -2,7 +2,7 @@ use anyhow::Result;
 use remdia_graph::*;
 use serde_json::json;
 use std::io::Read;
-fn container(path: &str) -> Result<&'static str> {
+pub(crate) fn container(path: &str) -> Result<&'static str> {
     let mut file = std::fs::File::open(path)?;
     let mut header = [0; 16];
     let size = file.read(&mut header)?;
@@ -96,4 +96,18 @@ impl Component for Capabilities {
     fn reset(&mut self, _generation: u64, _target: i64) -> Result<()> {
         anyhow::bail!("create a fresh capability query")
     }
+}
+
+pub(crate) fn mime(path: &str) -> Result<&'static str> {
+    Ok(match container(path)? {
+        "mp4" => "video/mp4",
+        "mp3" => "audio/mpeg",
+        "flac" => "audio/flac",
+        "ogg" => "audio/ogg",
+        "wav" => "audio/wav",
+        "aiff" => "audio/aiff",
+        "aac" => "audio/aac",
+        "mkv" => "video/x-matroska",
+        _ => "",
+    })
 }

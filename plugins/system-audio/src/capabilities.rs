@@ -2,9 +2,10 @@ use anyhow::Result;
 use remdia_graph::*;
 #[cfg(not(windows))]
 use serde_json::json;
-pub fn query() -> Result<serde_json::Value> {
+pub fn query(config: &NodeConfig) -> Result<serde_json::Value> {
     #[cfg(target_os = "macos")]
     {
+        let _ = config;
         let formats = super::audio_toolbox_sys::format_ids(false)?;
         let decode = [
             ("aac", *b"aac "),
@@ -32,7 +33,7 @@ pub fn query() -> Result<serde_json::Value> {
     }
     #[cfg(windows)]
     {
-        super::windows_audio::capabilities()
+        super::windows_audio::capabilities(config.settings["operation"] != "decode")
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     Ok(json!({"decode":[],"resample":false,"mp3_encode":false}))
@@ -59,8 +60,8 @@ pub struct Capabilities {
     pending: Option<MediaBuffer>,
 }
 impl Capabilities {
-    pub fn new() -> Result<Self> {
-        let bytes = serde_json::to_vec(&query()?)?;
+    pub fn new(config: &NodeConfig) -> Result<Self> {
+        let bytes = serde_json::to_vec(&query(config)?)?;
         Ok(Self {
             info: NodeInfo {
                 input: None,
@@ -92,7 +93,6 @@ impl Component for Capabilities {
         Ok(())
     }
     fn reset(&mut self, _generation: u64, _target: i64) -> Result<()> {
-        *self = Self::new()?;
-        Ok(())
+        anyhow::bail!("create a fresh capability query")
     }
 }
