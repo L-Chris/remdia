@@ -1,119 +1,37 @@
-//! A demand-driven media SDK with a backend-independent, dynamically loaded core.
+//! FFmpeg-free modular media SDK; the playback facade runs the same public DAG.
 pub mod plan;
 pub mod registry;
 use anyhow::{Context, Result, ensure};
-use registry::{Module, Registry};
+use registry::{Registry, TrustedFactory};
 pub use remdia_buffer::Budget;
 use remdia_buffer::Reservation;
-use remdia_plugin_abi::{self as abi, Output, View};
-pub use remdia_types::*;
-use std::{
-    ffi::c_void,
-    marker::PhantomData,
-    path::Path,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+pub use remdia_graph::{
+    self as graph, BufferHeader, Cancellation, EdgeSpec, FrameInfo, Graph, GraphEvent, GraphSpec,
+    Interrupted, MediaBuffer, MediaInfo, NodeConfig, NodeSpec, Rational, Request, Task,
 };
-
-#[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
-impl Cancellation {
-    pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-    pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
-unsafe extern "C" fn cancelled(context: *mut c_void) -> u8 {
-    unsafe { (&*context.cast::<Cancellation>()).is_cancelled() as u8 }
-}
-struct RawOutput {
-    raw: Output,
-    _module: Arc<Module>,
-}
-impl Drop for RawOutput {
-    fn drop(&mut self) {
-        if let Some(release) = self.raw.release {
-            unsafe {
-                release(self.raw.owner);
-            }
-        }
-    }
-}
-impl RawOutput {
-    fn new(module: Arc<Module>) -> Self {
-        Self {
-            raw: Output::default(),
-            _module: module,
-        }
-    }
-    fn json(&self) -> Result<&[u8]> {
-        ensure!(
-            self.raw.header.major == abi::ABI_MAJOR
-                && self.raw.header.struct_size >= std::mem::size_of::<Output>() as u32,
-            "invalid output header"
-        );
-        ensure!(
-            self.raw.json.len <= 1024 * 1024
-                && (self.raw.json.len == 0 || !self.raw.json.ptr.is_null()),
-            "invalid output metadata"
-        );
-        Ok(unsafe { self.raw.json.as_slice() })
-    }
-    fn status(&self, status: i32) -> Result<bool> {
-        if status == abi::OK {
-            return Ok(true);
-        }
-        if status == abi::EOF {
-            return Ok(false);
-        }
-        let value: serde_json::Value = serde_json::from_slice(self.json()?).unwrap_or_default();
-        anyhow::bail!(
-            "{}",
-            value
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("plugin failed")
-        )
-    }
-}
-/// Read-only plugin-owned planes. Clones share a single reservation and release callback.
-/// Frames are immutable and can cross threads. Sessions stay on the media worker.
+use remdia_graph::{Factory, Receive, Submit};
+use serde_json::json;
+use std::{
+    path::Path,
+    time::{Duration, Instant},
+};
 #[derive(Clone)]
-pub struct Frame(Arc<FrameInner>);
-struct FrameInner {
-    info: FrameInfo,
-    generation: u64,
-    output: RawOutput,
-    _reservation: Reservation,
-    _local: PhantomData<Rc<()>>,
-}
-// SAFETY: The v1 contract requires immutable output planes and a release callback
-// callable on any thread. Native modules are pinned for the process lifetime;
-// the reservation uses atomic counters. Loading a plugin is an unsafe operation.
-unsafe impl Send for FrameInner {}
-unsafe impl Sync for FrameInner {}
+pub struct Frame(MediaBuffer);
 impl Frame {
     pub fn info(&self) -> &FrameInfo {
-        &self.0.info
+        &self.0.header.info
     }
     pub fn generation(&self) -> u64 {
-        self.0.generation
+        self.0.header.generation
     }
-    pub fn plane(&self, index: usize) -> Option<&[u8]> {
-        self.0
-            .output
-            .raw
-            .planes
-            .get(index)
-            .map(|v| unsafe { v.as_slice() })
+    pub fn plane(&self, i: usize) -> Option<&[u8]> {
+        (i < 4).then(|| self.0.plane(i))
     }
     pub fn bytes(&self) -> &[u8] {
-        self.plane(0).unwrap()
+        self.0.bytes()
+    }
+    pub fn buffer(&self) -> &MediaBuffer {
+        &self.0
     }
 }
 pub struct Engine {
@@ -127,6 +45,15 @@ impl Engine {
             budget: Budget::new(managed_budget_bytes),
         })
     }
+    pub fn encode_mp3(&self, samples: &[f32]) -> Result<Frame> {
+        let directory = self
+            .registry
+            .candidates
+            .first()
+            .and_then(|c| c.path.parent())
+            .context("no capability packs installed")?;
+        encode_pcm_mp3(directory, &self.budget, Cancellation::default(), 1, samples)
+    }
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
@@ -134,146 +61,254 @@ impl Engine {
         &self.budget
     }
     pub fn plan(&self, request: &Request) -> Result<plan::Plan> {
-        plan::Plan::build(&self.registry, request, self.budget_limit())
-    }
-    fn budget_limit(&self) -> usize {
-        self.budget.limit()
+        plan::Plan::structure(&self.registry, request, self.budget.limit())
     }
     /// # Safety
-    /// The selected native capability pack must be trusted and obey remdia's ABI.
-    pub unsafe fn open(&self, request: Request, cancellation: Cancellation) -> Result<Session> {
-        let plan = self.plan(&request)?;
-        let candidate = self
-            .registry
-            .candidates
-            .iter()
-            .find(|c| c.manifest.id == plan.plugin)
-            .context("planned plugin disappeared")?;
-        let module = unsafe { candidate.load() }?;
-        let control = Box::new(cancellation);
-        let _reservation = self.budget.reserve(plan.output_reservation_bytes)?;
-        let json = serde_json::to_vec(&request)?;
-        let mut output = RawOutput::new(module.clone());
-        let mut handle = std::ptr::null_mut();
-        let status = unsafe {
-            (module.api.open)(
-                View::new(&json),
-                abi::Control {
-                    context: (&*control as *const Cancellation).cast_mut().cast(),
-                    cancelled,
-                },
-                &mut handle,
-                &mut output.raw,
-            )
-        };
-        // Close even if a plugin returns malformed header JSON after allocating a session.
-        let mut session = Session {
-            handle,
-            module,
-            control,
-            budget: self.budget.clone(),
+    /// Every component DLL in the selected graph must be trusted and obey ABI v2.
+    pub unsafe fn graph(&self, spec: &GraphSpec, cancel: Cancellation) -> Result<Graph> {
+        cancel.begin();
+        Graph::build(
+            spec,
+            &TrustedFactory(&self.registry),
+            self.budget.clone(),
+            cancel,
+        )
+    }
+    /// # Safety
+    /// Installed native component DLLs must be trusted and obey ABI v2.
+    pub unsafe fn open(&self, request: Request, cancel: Cancellation) -> Result<Session> {
+        self.plan(&request)?;
+        cancel.begin();
+        let factory = TrustedFactory(&self.registry);
+        let demux = factory.create(
+            &NodeConfig {
+                component: "native.demux".into(),
+                settings: serde_json::to_value(&request)?,
+            },
+            cancel.clone(),
+        )?;
+        let info = demux
+            .info()
+            .media
+            .clone()
+            .context("demuxer did not provide stream configurations")?;
+        let plan = plan::Plan::for_media(&request, &info, self.budget.limit())?;
+        let mut instances = vec![("demux".into(), demux)];
+        for node in plan.graph.nodes.iter().skip(1) {
+            instances.push((
+                node.id.clone(),
+                factory
+                    .create(&node.config, cancel.clone())
+                    .with_context(|| format!("configure {}", node.id))?,
+            ));
+        }
+        let graph = Graph::from_instances(
+            instances,
+            &plan.graph.edges,
+            self.budget.clone(),
+            cancel.clone(),
+        )?;
+        Ok(Session {
+            graph,
+            info,
+            plan,
             request,
-            info: None,
-            generation: 1,
-            _local: PhantomData,
-        };
-        ensure!(
-            output.status(status)? && !handle.is_null(),
-            "plugin did not create a session"
-        );
-        session.info = Some(serde_json::from_slice(output.json()?)?);
-        Ok(session)
+            cancel,
+            target_us: 0,
+            budget: self.budget.clone(),
+            registry_dir: self
+                .registry
+                .candidates
+                .first()
+                .and_then(|c| c.path.parent())
+                .map(Path::to_path_buf)
+                .context("missing registry directory")?,
+        })
     }
 }
-pub struct Session {
-    handle: *mut c_void,
-    module: Arc<Module>,
-    control: Box<Cancellation>,
-    budget: Budget,
-    request: Request,
-    info: Option<MediaInfo>,
+fn encode_pcm_mp3(
+    directory: &Path,
+    budget: &Budget,
+    cancel: Cancellation,
     generation: u64,
-    _local: PhantomData<Rc<()>>,
-}
-impl Drop for Session {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe {
-                (self.module.api.close)(self.handle);
+    samples: &[f32],
+) -> Result<Frame> {
+    ensure!(
+        !samples.is_empty() && samples.len() <= 120 * 16000,
+        "invalid MP3 chunk"
+    );
+    cancel.begin();
+    let registry = Registry::discover(directory)?;
+    let mut encoder = TrustedFactory(&registry).create(
+        &NodeConfig {
+            component: "native.mp3.encode".into(),
+            settings: json!({"rate":16000,"channels":1}),
+        },
+        cancel.clone(),
+    )?;
+    let mut header = BufferHeader {
+        stream_id: 0,
+        generation,
+        info: FrameInfo::Audio {
+            pts_us: 0,
+            rate: 16000,
+            channels: 1,
+            samples: samples.len(),
+            format: "f32le".into(),
+        },
+    };
+    let input = MediaBuffer::new(
+        header.clone(),
+        vec![samples.iter().flat_map(|s| s.to_le_bytes()).collect()],
+    );
+    ensure!(
+        encoder.submit(&input)? == Submit::Accepted,
+        "encoder blocked on first input"
+    );
+    encoder.drain()?;
+    let reservation = budget.reserve(16 * 1024 * 1024)?;
+    let mut output = Vec::new();
+    let mut iterations = 0;
+    loop {
+        iterations += 1;
+        ensure!(iterations < 10000, "MP3 encoder failed to drain");
+        match encoder.receive()? {
+            Receive::Output(b) => {
+                let offset = match b.header.info {
+                    FrameInfo::Bytes { offset, .. } => {
+                        offset.unwrap_or(output.len() as u64) as usize
+                    }
+                    _ => output.len(),
+                };
+                let end = offset
+                    .checked_add(b.len())
+                    .context("encoded offset overflow")?;
+                ensure!(end <= 16 * 1024 * 1024, "MP3 output exceeds budget");
+                output.resize(output.len().max(end), 0);
+                output[offset..end].copy_from_slice(b.bytes());
             }
+            Receive::End => break,
+            Receive::NeedInput => anyhow::bail!("MP3 encoder requested input after drain"),
         }
     }
+    header.info = FrameInfo::Blob {
+        format: "mp3".into(),
+    };
+    Ok(Frame(
+        MediaBuffer::new(header, vec![output]).with_budget(reservation),
+    ))
+}
+pub struct Session {
+    graph: Graph,
+    info: MediaInfo,
+    plan: plan::Plan,
+    request: Request,
+    cancel: Cancellation,
+    target_us: i64,
+    budget: Budget,
+    registry_dir: std::path::PathBuf,
 }
 impl Session {
     pub fn info(&self) -> &MediaInfo {
-        self.info.as_ref().unwrap()
+        &self.info
+    }
+    pub fn plan(&self) -> &plan::Plan {
+        &self.plan
     }
     pub fn cancellation(&self) -> Cancellation {
-        (*self.control).clone()
+        self.cancel.clone()
     }
     pub fn generation(&self) -> u64 {
-        self.generation
-    }
-    pub fn read(&mut self) -> Result<Option<Frame>> {
-        ensure!(!self.control.is_cancelled(), "cancelled");
-        let reservation = self.budget.reserve(self.request.max_frame_bytes)?;
-        let mut output = RawOutput::new(self.module.clone());
-        let status = unsafe { (self.module.api.next)(self.handle, &mut output.raw) };
-        self.frame(status, output, reservation, self.request.max_frame_bytes)
-    }
-    fn frame(
-        &self,
-        status: i32,
-        output: RawOutput,
-        reservation: Reservation,
-        limit: usize,
-    ) -> Result<Option<Frame>> {
-        if !output.status(status)? {
-            return Ok(None);
-        }
-        let info = serde_json::from_slice(output.json()?)?;
-        let mut size = 0usize;
-        for v in &output.raw.planes {
-            ensure!(v.len == 0 || !v.ptr.is_null(), "null output plane");
-            size = size.checked_add(v.len).context("plane size overflow")?;
-        }
-        ensure!(size <= limit, "plugin output exceeds reserved budget");
-        Ok(Some(Frame(Arc::new(FrameInner {
-            info,
-            generation: self.generation,
-            output,
-            _reservation: reservation,
-            _local: PhantomData,
-        }))))
+        self.graph.generation()
     }
     pub fn seek(&mut self, target_us: i64) -> Result<u64> {
-        ensure!(target_us >= 0, "negative seek");
-        ensure!(!self.control.is_cancelled(), "cancelled");
-        let generation = self
-            .generation
-            .checked_add(1)
-            .context("generation overflow")?;
-        let mut output = RawOutput::new(self.module.clone());
-        let status = unsafe { (self.module.api.seek)(self.handle, target_us, &mut output.raw) };
-        ensure!(output.status(status)?, "seek returned EOF");
-        self.generation = generation;
+        let generation = self.graph.reset(target_us)?;
+        self.target_us = target_us;
         Ok(generation)
     }
-    pub fn artwork(&mut self) -> Result<Option<Frame>> {
-        let limit = 8 * 1024 * 1024;
-        let reservation = self.budget.reserve(limit)?;
-        let mut out = RawOutput::new(self.module.clone());
-        let status = unsafe { (self.module.api.artwork)(self.handle, &mut out.raw) };
-        self.frame(status, out, reservation, limit)
+    pub fn read(&mut self) -> Result<Option<Frame>> {
+        ensure!(
+            self.request.task != Task::Probe,
+            "probe session does not decode"
+        );
+        self.cancel.begin();
+        let started = Instant::now();
+        loop {
+            ensure!(
+                started.elapsed() < Duration::from_millis(self.request.timeout_ms),
+                "media graph timed out"
+            );
+            match self.graph.poll()? {
+                GraphEvent::End => return Ok(None),
+                GraphEvent::Pending => {}
+                GraphEvent::Output { mut buffer, .. } => {
+                    match buffer.header.info.clone() {
+                        FrameInfo::Packet { .. } => continue,
+                        FrameInfo::Video { pts_us, .. } => {
+                            if pts_us.is_some_and(|p| p - self.info.origin_us < self.target_us) {
+                                continue;
+                            }
+                            if let FrameInfo::Video { pts_us, .. } = &mut buffer.header.info
+                                && let Some(p) = pts_us
+                            {
+                                *p -= self.info.origin_us;
+                            }
+                        }
+                        FrameInfo::Audio {
+                            pts_us,
+                            rate,
+                            channels,
+                            samples,
+                            ..
+                        } => {
+                            let pts = pts_us - self.info.origin_us;
+                            let skip =
+                                (((self.target_us - pts).max(0) as i128 * rate as i128 + 999999)
+                                    / 1000000)
+                                    .min(samples as i128) as usize;
+                            if skip == samples {
+                                continue;
+                            }
+                            let mut header = buffer.header.clone();
+                            if let FrameInfo::Audio {
+                                pts_us, samples, ..
+                            } = &mut header.info
+                            {
+                                *pts_us = pts + skip as i64 * 1_000_000 / rate as i64;
+                                *samples -= skip;
+                            }
+                            if skip > 0 {
+                                let stride = channels as usize * 4;
+                                let bytes = buffer.bytes()[skip * stride..].to_vec();
+                                let reservation = self.budget.reserve(bytes.len())?;
+                                buffer =
+                                    MediaBuffer::new(header, vec![bytes]).with_budget(reservation);
+                            } else {
+                                buffer.header = header;
+                            }
+                        }
+                        _ => {}
+                    }
+                    return Ok(Some(Frame(buffer)));
+                }
+            }
+        }
     }
-    /// Extract a bounded 16 kHz mono f32 chunk. Use a dedicated Task::Audio session.
-    /// Missing PTS gaps become silence; frames beyond the requested end are clipped.
+    pub fn artwork(&mut self) -> Result<Option<Frame>> {
+        let reservation = self.budget.reserve(8 * 1024 * 1024)?;
+        let b = self.graph.command("demux", &json!({"op":"artwork"}))?;
+        b.map(|b| {
+            ensure!(b.len() <= 8 * 1024 * 1024, "artwork exceeds budget");
+            Ok(Frame(b.with_budget(reservation)))
+        })
+        .transpose()
+    }
     pub fn audio_chunk(&mut self, start_us: i64, duration_us: i64) -> Result<AudioChunk> {
         ensure!(
             self.request.task == Task::Audio
                 && self.request.audio_rate == 16000
                 && self.request.audio_channels == 1,
-            "audio chunks require 16kHz mono Audio session"
+            "audio chunks require a 16kHz mono Audio session"
         );
         ensure!(
             (1..=120_000_000).contains(&duration_us),
@@ -283,10 +318,8 @@ impl Session {
             .checked_add(duration_us)
             .context("range overflow")?;
         self.seek(start_us)?;
-        let capacity = usize::try_from((i128::from(duration_us) * 16000 + 999_999) / 1_000_000)?;
+        let capacity = usize::try_from((i128::from(duration_us) * 16000 + 999999) / 1_000_000)?;
         let reservation = self.budget.reserve(capacity * 4)?;
-        // Preallocate exactly the admitted chunk; geometric Vec growth could
-        // otherwise exceed the bytes reserved for managed PCM.
         let mut samples = Vec::with_capacity(capacity);
         while let Some(frame) = self.read()? {
             let FrameInfo::Audio { pts_us, .. } = *frame.info() else {
@@ -295,14 +328,14 @@ impl Session {
             if pts_us >= end {
                 break;
             }
-            let offset = (((i128::from(pts_us) - i128::from(start_us)) * 16000 + 500_000)
+            let offset = (((i128::from(pts_us) - i128::from(start_us)) * 16000 + 500000)
                 / 1_000_000)
                 .max(0) as usize;
             if offset > samples.len() {
                 samples.resize(offset.min(capacity), 0.0);
             }
             let skip = samples.len().saturating_sub(offset);
-            for bytes in frame
+            for v in frame
                 .bytes()
                 .as_chunks::<4>()
                 .0
@@ -310,7 +343,7 @@ impl Session {
                 .skip(skip)
                 .take(capacity - samples.len())
             {
-                samples.push(f32::from_le_bytes(*bytes));
+                samples.push(f32::from_le_bytes(*v));
             }
             if samples.len() == capacity {
                 break;
@@ -323,16 +356,13 @@ impl Session {
         })
     }
     pub fn encode_mp3(&self, chunk: &AudioChunk) -> Result<Frame> {
-        let limit = 16 * 1024 * 1024;
-        let reservation = self.budget.reserve(limit)?;
-        // Supported platforms are little endian. Avoid an extra PCM copy.
-        let pcm = unsafe {
-            std::slice::from_raw_parts(chunk.samples.as_ptr().cast(), chunk.samples.len() * 4)
-        };
-        let mut out = RawOutput::new(self.module.clone());
-        let status = unsafe { (self.module.api.encode_mp3)(View::new(pcm), &mut out.raw) };
-        self.frame(status, out, reservation, limit)?
-            .context("MP3 encoder returned EOF")
+        encode_pcm_mp3(
+            &self.registry_dir,
+            &self.budget,
+            self.cancel.clone(),
+            self.generation(),
+            &chunk.samples,
+        )
     }
 }
 pub struct AudioChunk {

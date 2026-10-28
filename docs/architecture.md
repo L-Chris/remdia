@@ -1,44 +1,37 @@
-# Architecture
+# Component graph architecture
 
-The original [proposal](remedia.md) is the direction, not a claim that every subsystem already exists.
+The project has no FFmpeg build, runtime, command-line or codec dependency. The old fused session backend has been removed.
 
 ```text
-remdia-cli -> remdia (registry / plan / runtime)
-                   -> remdia-types
-                   -> remdia-buffer
-                   -> remdia-plugin-abi
-                            ^
-                    remdia-backend-ffmpeg (cdylib)
-                            -> libavformat / libavcodec / swresample / swscale
+remdia-cli / replayer -> remdia playback facade / public Engine::graph
+                      -> remdia-graph: typed buffers, ports, DAG scheduler
+                      -> remdia-buffer: shared resource ledger
+                      -> remdia-plugin-abi: versioned platform C ABI v2
+                                  ^
+        native pack: Rust demux, audio decoder, filters, encoder, mux, sink
+        Windows pack: independent Media Foundation video decoder
 ```
 
-The default Cargo workspace members build the host without FFmpeg headers, linker inputs or runtime libraries. `--workspace` also builds the FFmpeg capability pack. Discovery parses platform-specific manifests without loading code. Open selects a compatible pack and lazily queries its C ABI. Modules are cached by canonical path and pinned for process lifetime. Instances are destroyed at session close; returned buffers have independent owners and remain valid.
+A capability pack registers multiple independent factories. Components are created individually, and every graph node owns its own submit/receive/drain/reset state. Media samples cross DLLs as immutable byte views with explicit retain/release callbacks. Native code remains loaded for the process lifetime. A session is a convenience graph builder; it does not contain a second, fused implementation.
 
-V1 deliberately fuses source, demux, decoder and converter in one session pack. It exercises the ABI, resource and timeline contracts with replayer's workload before introducing a general graph. The planner selects task paths, thread settings and CPU output reservations. It is a structural plan; actual streams are reported after open, and actual hardware decoding is reported per frame. It is not yet a per-track graph cost optimizer or remux planner.
+## Graph execution
 
-## Runtime
+A JSON GraphSpec contains named nodes, component IDs/configuration, and typed edges. Edges can select a stream ID and independently limit bytes, buffer count and queued media duration. Construction rejects missing nodes, duplicate names/edges, cycles, incompatible port constraints and unconnected inputs. Ports declare packet, audio, video or container bytes; optional formats/rates/channels refine compatibility. The current memory domain is CPU; GPU resources are not silently treated as CPU buffers.
 
-`Session::read` pulls at most one output. The backend drains the active decoder before reading the next packet, handles one-input/many-output decoding, sends EOF once to each decoder, then flushes the resampler. There is no decoded-frame background queue and no unbounded packet queue. Codec internals may retain references. Codec worker count is configured per decoder, not a hard process thread cap.
+The runtime visits nodes in reverse topological order. A node's pending output is routed only when every matching outgoing edge can accept it. Fanout shares immutable buffers. Downstream receives outputs before submitting another input. WOULD_BLOCK leaves an edge's input untouched. Producers reach EOF first; each consumer receives drain only after all incoming edges are empty and their producers ended. Mux finalization therefore follows decoder/filter tails, and sink publication follows mux patches. The runtime has no per-node thread pool.
 
-Before a plugin operation the host reserves the maximum allowed output. Each returned frame carries that reservation until its last clone is released. The plugin checks per-packet, dimensions and output sizes. This conservative accounting intentionally reserves more than many small frames require. Peak reservation is reported separately from RSS; metadata, encoded exports and external codec/driver allocation are not comprehensive process memory accounting. Chunk PCM has an additional reservation. Serialization and WAV export allocate temporary data, so the budget is not an allocator-wide hard cap.
+Before receive, the ledger reserves the advertised maximum output allocation; successful output reduces that reservation to the plane bytes actually returned. Clones share their owner. Cross-DLL wrappers can retain earlier reservations, so some pass-through paths are conservatively overcounted. Codec-internal allocations, source buffers, system MFT allocations and temporary file/export buffers are not a hard process memory cap. If reservation fails before a call, the input stream is not advanced.
 
-A held frame cannot block a thread waiting for another reservation: the read fails immediately, and callers can release frames and retry without consuming another packet. Cancellation uses a stable host callback context held through plugin close. Input interrupt closures check cancellation and an operation deadline; decoder CPU work is only interrupted between API calls. Per-read deadlines also limit pathological streams that never produce matching output. Host callbacks do not panic.
+Arbitrary composition means compatible contracts, not arbitrary media conversions. A PCM edge cannot connect to a compressed-packet decoder. WAV requires its configured rate/channels and the planner/caller inserts a resampler. Multiple outgoing branches can apply different gains, sample rates and muxers. A demux → packet.copy → mp3.mux → sink path never creates a decoder. Output filenames must not exist; a sink uses a private temporary file and hard-link publication to prevent overwriting another writer.
 
-## Timeline
+## Time and cancellation
 
-Track time bases remain positive integer rationals. Public seek positions and output timestamps use integer microseconds, normalized against container start time; unknown video PTS is `None`. Audio output advances using integer sample indices, avoiding accumulated float rounding. Timestamp discontinuities greater than 100ms reset the resampled output anchor. Seek lands at/before a keyframe, flushes decoders and resampling, discards earlier video and clips PCM at sample boundaries. Successful seeks increment generation; previously returned frames keep their original generation.
+Packets retain PTS/DTS, duration, time base, trim start/end and stream identity. Symphonia supplies signed composition timestamps and gapless packet trims. Audio decoder output starts after packet trim; zero-length trimmed buffers do not establish a resampling anchor. Resampling uses a bounded, stateful sinc filter, trims its startup delay, and flushes exactly the admitted sample count at EOF. A 120-second cap bounds subtitle PCM chunks.
 
-`audio_chunk` owns an independent mono 16kHz Audio session, seeks for each range, inserts bounded silence for timestamp gaps and clips its end. Requests are limited to 120 seconds. Quiet-point chunk scheduling, overlapping AI requests and subtitle text formatting belong to replayer.
+Seek asks the demuxer for an accurate preceding packet, then resets all downstream nodes and queues under a new generation. The facade drops pre-target video and clips audio at sample boundaries. Previously returned frames keep their old generation. Cancellation can reference the application's stop flag. A separate interrupt serial permits a new seek to interrupt blocked reads without permanently cancelling the session. HTTP uses bounded request deadlines and Range resume with byte-offset validation.
 
-## Windows video
+## Native implementations
 
-D3D11VA is attempted only for playback when enabled. Decoder/device creation failure falls back to software. The format callback permits FFmpeg's software choice when hardware cannot negotiate a supported format. Mid-stream hardware failures return errors; no silent codec restart occurs. Actual hardware surfaces are downloaded to CPU before publication; WGPU/D3D sharing is deferred. Software video remains native planar data. Unsupported plane layouts are converted through swscale rather than exposed with invalid strides.
+Symphonia 0.6 provides Rust demux and audio codecs, with an independent libopus adapter for Opus. Audio filters and WAV muxing are Rust. MP3 encoding uses the standalone LAME library and patches a final Xing/LAME frame; it does not use an FFmpeg wrapper.
 
-## Future milestones
-
-1. Integrate the SDK into replayer behind a feature and run its existing playback/network suite.
-2. Certify real Windows GPUs and codec/profile/bit-depth combinations; measure against the same FFmpeg backend.
-3. Separate component factories and add packet-copy/remux planning with explicit bitstream and timestamp negotiation.
-4. Add native Media Foundation and device-domain buffers with negotiated synchronization.
-
-No performance or memory-reduction percentage is promised before those measurements.
+Windows video consumes demuxed compressed packets directly via IMFTransform. AVC/HEVC configuration records and length-prefixed samples are converted to Annex B inside the decoder adapter. Input/output are separate, MFT stream changes renegotiate output, and draining emits reordered B-frames. The current implementation selects synchronous software MFTs and CPU NV12; hardware MFT/device sharing and HDR are separate future work. Codec availability is an OS capability, with explicit failure rather than FFmpeg fallback.

@@ -12,7 +12,7 @@ p.add_argument('--exe', required=True)
 p.add_argument('--fixtures', required=True)
 a = p.parse_args()
 exe = str(Path(a.exe).resolve())
-media = (Path(a.fixtures) / 'av.mkv').read_bytes()
+media = (Path(a.fixtures) / 'av.mp4').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -31,7 +31,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(206 if requested else 200)
         self.send_header('Accept-Ranges', 'bytes')
         self.send_header('Content-Length', str(end - start + 1))
-        self.send_header('Content-Type', 'video/x-matroska')
+        self.send_header('Content-Type', 'video/mp4')
         if requested:
             self.send_header('Content-Range', f'bytes {start}-{end}/{len(media)}')
         self.end_headers()
@@ -43,7 +43,7 @@ server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 base = f'http://127.0.0.1:{server.server_port}'
 try:
-    result = subprocess.run([exe, 'decode', base + '/av.mkv', '--start-us', '1000000', '--frames', '1000', '--software'], capture_output=True, text=True, check=True, timeout=15)
+    result = subprocess.run([exe, 'decode', base + '/av.mp4', '--start-us', '1000000', '--frames', '1000', '--software'], capture_output=True, text=True, check=True, timeout=15)
     counts = json.loads(result.stdout)
     assert counts['video_frames'] == 48 and counts['eof'], counts
     started = time.monotonic()

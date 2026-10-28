@@ -5,7 +5,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define REMDIA_ABI_MAJOR 1
+#define REMDIA_ABI_MAJOR 2
 #define REMDIA_OK 0
 #define REMDIA_EOF 1
 #define REMDIA_ERROR (-1)
@@ -22,16 +22,26 @@ typedef struct {
 } RemdiaOutput;
 typedef struct {
     RemdiaHeader header;
-    int32_t (*open)(RemdiaView, RemdiaControl, void **, RemdiaOutput *);
-    int32_t (*next)(void *, RemdiaOutput *);
-    int32_t (*seek)(void *, int64_t, RemdiaOutput *);
-    int32_t (*artwork)(void *, RemdiaOutput *);
-    int32_t (*encode_mp3)(RemdiaView, RemdiaOutput *);
+    RemdiaView json;
+    RemdiaView planes[4];
+    const void *owner;
+    void (*retain)(const void *);
+    void (*release)(const void *);
+} RemdiaInput;
+typedef struct {
+    RemdiaHeader header;
+    int32_t (*describe)(RemdiaOutput *);
+    int32_t (*create)(RemdiaView, RemdiaControl, void **, RemdiaOutput *);
+    int32_t (*submit)(void *, const RemdiaInput *, RemdiaOutput *);
+    int32_t (*receive)(void *, RemdiaOutput *);
+    int32_t (*drain)(void *, RemdiaOutput *);
+    int32_t (*reset)(void *, uint64_t, int64_t, RemdiaOutput *);
+    int32_t (*command)(void *, RemdiaView, RemdiaOutput *);
     void (*close)(void *);
 } RemdiaPluginApi;
 /* Locate dynamically by name; the header size is sizeof(RemdiaPluginApi). */
-typedef int32_t (*RemdiaQueryV1)(RemdiaHeader, RemdiaPluginApi *);
-int32_t remdia_plugin_query_v1(RemdiaHeader host, RemdiaPluginApi *out);
+typedef int32_t (*RemdiaQueryV2)(RemdiaHeader, RemdiaPluginApi *);
+int32_t remdia_plugin_query_v2(RemdiaHeader host, RemdiaPluginApi *out);
 #ifdef __cplusplus
 }
 #endif

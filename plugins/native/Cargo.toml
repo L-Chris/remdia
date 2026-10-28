@@ -1,0 +1,23 @@
+[package]
+name = "remdia-backend-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+remdia-types.workspace = true
+remdia-graph.workspace = true
+remdia-plugin-abi.workspace = true
+symphonia = { version = "0.6.1", features = ["all", "exp-video-codecs"] }
+symphonia-adapter-libopus = "0.3"
+rubato = { version = "0.16.2", default-features = false }
+mp3lame-encoder = { version = "0.2.5", features = ["std"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+image = { version = "0.25", default-features = false }

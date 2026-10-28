@@ -16,11 +16,11 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     HMODULE library = LoadLibraryA(argv[1]);
     assert(library);
-    RemdiaQueryV1 query = (RemdiaQueryV1)GetProcAddress(library, "remdia_plugin_query_v1");
+    RemdiaQueryV2 query = (RemdiaQueryV2)GetProcAddress(library, "remdia_plugin_query_v2");
 #else
     void *library = dlopen(argv[1], RTLD_NOW);
     if (!library) { fprintf(stderr, "%s\n", dlerror()); return 1; }
-    RemdiaQueryV1 query = (RemdiaQueryV1)dlsym(library, "remdia_plugin_query_v1");
+    RemdiaQueryV2 query = (RemdiaQueryV2)dlsym(library, "remdia_plugin_query_v2");
 #endif
     assert(query);
     RemdiaPluginApi api;
@@ -46,7 +46,7 @@ int main(int argc, char **argv) {
     void *session = NULL;
     RemdiaView view = {request, length};
     RemdiaControl control = {NULL, cancelled};
-    assert(api.open(view, control, &session, &output) == REMDIA_OK);
+    assert(api.create(view, control, &session, &output) == REMDIA_OK);
     assert(session && output.json.ptr && output.json.len > 0 && output.release);
     api.close(session);
     /* Even control metadata is owned by the output, independent of session. */

@@ -14,8 +14,8 @@ impl Directory {
         std::fs::create_dir(&path).unwrap();
         Self(path)
     }
-    fn manifest(&self, filename: &str, library: &str, os: &str) {
-        std::fs::write(self.0.join(filename),serde_json::to_vec(&json!({"id":"test","abi_major":1,"os":os,"arch":std::env::consts::ARCH,"library":library,"capabilities":["decode"]})).unwrap()).unwrap();
+    fn manifest(&self, file: &str, library: &str, os: &str) {
+        std::fs::write(self.0.join(file),serde_json::to_vec(&json!({"id":"test","abi_major":2,"os":os,"arch":std::env::consts::ARCH,"library":library,"capabilities":["native.demux"]})).unwrap()).unwrap();
     }
 }
 impl Drop for Directory {
@@ -24,22 +24,24 @@ impl Drop for Directory {
     }
 }
 #[test]
-fn planning_reads_manifests_without_loading_or_probing() {
+fn planning_does_not_load_code_or_probe_sources() {
     let dir = Directory::new();
     dir.manifest("test.json", "does-not-exist.dll", std::env::consts::OS);
-    let engine = Engine::discover(&dir.0, 256 * 1024 * 1024).unwrap();
+    let e = Engine::discover(&dir.0, 256 * 1024 * 1024).unwrap();
     assert_eq!(
-        engine
-            .plan(&Request::playback("also-does-not-exist.mkv"))
+        e.plan(&Request::playback("missing.mkv"))
             .unwrap()
-            .plugin,
-        "test"
+            .graph
+            .nodes[0]
+            .config
+            .component,
+        "native.demux"
     );
     dir.manifest("duplicate.json", "other.dll", std::env::consts::OS);
     assert!(Engine::discover(&dir.0, 256 * 1024 * 1024).is_err());
 }
 #[test]
-fn discovery_rejects_traversal_and_oversize_but_skips_other_platforms() {
+fn reject_traversal_oversize_and_old_abi() {
     let dir = Directory::new();
     dir.manifest("test.json", "../other.dll", std::env::consts::OS);
     assert!(Engine::discover(&dir.0, 256 * 1024 * 1024).is_err());

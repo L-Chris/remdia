@@ -1,77 +1,80 @@
 use crate::{Request, Task, registry::Registry};
 use anyhow::{Result, ensure};
+use remdia_graph::*;
 use serde::Serialize;
+use serde_json::json;
 #[derive(Debug, Serialize)]
 pub struct Plan {
-    pub plugin: String,
     pub task: Task,
-    pub nodes: Vec<String>,
+    pub graph: GraphSpec,
     pub managed_budget_bytes: usize,
-    pub output_reservation_bytes: usize,
-    pub threads: u32,
-    pub memory_domain: String,
     pub notes: Vec<String>,
 }
 impl Plan {
-    pub fn build(registry: &Registry, request: &Request, budget: usize) -> Result<Self> {
+    pub fn structure(registry: &Registry, request: &Request, budget: usize) -> Result<Self> {
         request.validate()?;
-        let capability = match request.task {
-            Task::Probe => "probe",
-            Task::Playback => "decode",
-            Task::Audio => "audio",
-            Task::Thumbnail => "thumbnail",
-        };
-        let plugin = registry.select(capability)?;
-        let output_reservation_bytes = if request.task == Task::Probe {
-            8 * 1024 * 1024
-        } else {
-            request.max_frame_bytes
-        };
         ensure!(
-            budget >= output_reservation_bytes,
-            "budget below minimum output reservation"
+            budget >= request.max_frame_bytes.max(request.max_packet_bytes),
+            "budget below maximum output reservation"
         );
-        let nodes = match request.task {
-            Task::Probe => vec!["source", "demux headers / tags"],
-            Task::Playback => vec![
-                "source",
-                "demux",
-                "selected audio/video decoders",
-                "native CPU video / f32 PCM",
-            ],
-            Task::Audio => vec![
-                "source",
-                "demux audio only",
-                "audio decoder",
-                "resample / remix f32",
-            ],
-            Task::Thumbnail => vec![
-                "source",
-                "demux video only",
-                "video decoder",
-                "scale RGBA <= 600px",
-            ],
-        }
-        .into_iter()
-        .map(String::from)
-        .collect();
-        Ok(Self {
-            plugin: plugin.manifest.id.clone(),
-            task: request.task,
-            nodes,
-            managed_budget_bytes: budget,
-            output_reservation_bytes,
-            threads: request.threads,
-            memory_domain: "cpu".into(),
-            notes: vec![
-                "Demand-driven: no background decoded-frame queue".into(),
-                "Codec/driver private allocations are outside the managed budget".into(),
-                if request.hardware {
-                    "Windows attempts D3D11VA at decoder creation; output is downloaded to CPU. No GPU zero-copy guarantee.".into()
+        registry.select("native.demux")?;
+        Ok(Self {task:request.task,graph:GraphSpec {nodes:vec![NodeSpec {id:"demux".into(),config:NodeConfig {component:"native.demux".into(),settings:serde_json::to_value(request)?}}],edges:Vec::new()},managed_budget_bytes:budget,
+   notes:vec!["Structural probe plan; open/explain discovers tracks and builds decoder/filter branches".into(),"No FFmpeg runtime, build or codec dependency".into(),"Managed CPU buffer ledger excludes codec/driver private memory".into()]})
+    }
+    pub(crate) fn for_media(request: &Request, media: &MediaInfo, budget: usize) -> Result<Self> {
+        let mut nodes = vec![NodeSpec {
+            id: "demux".into(),
+            config: NodeConfig {
+                component: "native.demux".into(),
+                settings: serde_json::to_value(request)?,
+            },
+        }];
+        let mut edges = Vec::new();
+        if request.task != Task::Probe {
+            let mut selected = Vec::new();
+            if matches!(request.task, Task::Playback | Task::Thumbnail)
+                && let Some(track) = media
+                    .tracks
+                    .iter()
+                    .find(|t| t.kind == "video" && !t.attached_picture)
+            {
+                selected.push(track);
+            }
+            if matches!(request.task, Task::Playback | Task::Audio)
+                && let Some(track) = media.tracks.iter().find(|t| t.kind == "audio")
+            {
+                selected.push(track);
+            }
+            ensure!(!selected.is_empty(), "no matching audio or video track");
+            for track in selected {
+                let id = format!("decode_{}", track.index);
+                let component = if track.kind == "video" {
+                    "windows.video.decode"
                 } else {
-                    "Software decoding requested".into()
-                },
-            ],
-        })
+                    "native.audio.decode"
+                };
+                nodes.push(NodeSpec {id:id.clone(),config:NodeConfig {component:component.into(),settings:json!({"track":track,"max_frame_bytes":request.max_frame_bytes,"hardware":request.hardware})}});
+                edges.push(EdgeSpec::between(
+                    "demux",
+                    id.clone(),
+                    Some(track.index as u32),
+                ));
+                if track.kind == "audio" {
+                    let filter = format!("audio_{}", track.index);
+                    nodes.push(NodeSpec {id:filter.clone(),config:NodeConfig {component:"native.audio.resample".into(),settings:json!({"rate":request.audio_rate,"channels":request.audio_channels})}});
+                    edges.push(EdgeSpec::between(id, filter, None));
+                } else if request.task == Task::Thumbnail {
+                    nodes.push(NodeSpec {
+                        id: "thumbnail".into(),
+                        config: NodeConfig {
+                            component: "native.video.rgba".into(),
+                            settings: json!({"max_dimension":600}),
+                        },
+                    });
+                    edges.push(EdgeSpec::between(id, "thumbnail", None));
+                }
+            }
+        }
+        Ok(Self {task:request.task,graph:GraphSpec {nodes,edges},managed_budget_bytes:budget,notes:vec!["Independent demux, decoder and filter factories; compatible nodes can come from different DLLs".into(),"Per-stream routing; compressed packets are not forced through a decoder".into()]})
     }
 }

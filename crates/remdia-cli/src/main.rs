@@ -17,6 +17,10 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Plugins,
+    /// Execute a user-defined DAG of compatible component factories.
+    Graph {
+        file: PathBuf,
+    },
     Probe {
         source: String,
     },
@@ -70,13 +74,41 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Command::Graph { file } = args.command {
+        let spec: remdia::GraphSpec = serde_json::from_slice(&std::fs::read(file)?)?;
+        let mut graph = unsafe { engine.graph(&spec, Cancellation::default()) }?;
+        let mut outputs = 0;
+        let started = std::time::Instant::now();
+        loop {
+            anyhow::ensure!(
+                started.elapsed().as_millis() < args.timeout_ms as u128,
+                "graph execution timed out"
+            );
+            match graph.poll()? {
+                remdia::GraphEvent::End => break,
+                remdia::GraphEvent::Pending => {}
+                remdia::GraphEvent::Output { node, buffer } => {
+                    outputs += 1;
+                    println!(
+                        "{}",
+                        serde_json::json!({"node":node,"header":buffer.header,"bytes":buffer.len()})
+                    );
+                }
+            }
+        }
+        eprintln!(
+            "graph complete: {outputs} outputs; peak reservation {} bytes",
+            engine.budget().peak()
+        );
+        return Ok(());
+    }
     let source = match &args.command {
         Command::Probe { source }
         | Command::Plan { source, .. }
         | Command::Decode { source, .. }
         | Command::Thumbnail { source, .. }
         | Command::Extract { source, .. } => source,
-        Command::Plugins => unreachable!(),
+        Command::Plugins | Command::Graph { .. } => unreachable!(),
     };
     let mut request = Request::playback(source);
     request.timeout_ms = args.timeout_ms;

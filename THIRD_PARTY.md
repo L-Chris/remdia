@@ -1,14 +1,15 @@
 # Third-party software
 
-remdia's original source is MIT licensed. Runtime libraries retain their own licenses. MP3 dynamic-buffer muxing follows the implementation in L-Chris/replayer's `src/subtitles/mp3.rs`; the two projects share the same maintainer.
+remdia's original SDK, graph runtime and CLI code are MIT licensed. There is no FFmpeg dependency in the Cargo graph, runtime, package or test toolchain.
 
-The FFmpeg capability pack uses ffmpeg-next 9 (WTFPL), ffmpeg-sys-next (WTFPL), FFmpeg 9.0.2 and the libmp3lame encoder. FFmpeg's LGPL/GPL status depends on its build configuration. The Windows bootstrap uses the existing LGPL shared development build distributed at:
+Native capability packs incorporate these separately licensed libraries:
 
-- Binary and development files: https://github.com/L-Chris/replayer/releases/tag/deps-ffmpeg-9.0.2
-- Upstream build system and corresponding dependency source retrieval: https://github.com/BtbN/FFmpeg-Builds
-- FFmpeg source and legal information: https://ffmpeg.org/download.html and https://ffmpeg.org/legal.html
-- LAME source: https://lame.sourceforge.io/
+- Symphonia 0.6.1 (MPL-2.0): https://github.com/pdeljanov/Symphonia . Its Rust demuxers and audio decoders are compiled without modifications; exact source crates/checksums are recorded in Cargo.lock.
+- symphonia-adapter-libopus 0.3 (MIT OR Apache-2.0), with vendored libopus (BSD-3-Clause): https://github.com/aschey/symphonia-adapters and https://opus-codec.org/ . opusic-sys builds its matching vendored source using CMake.
+- rubato 0.16.2 (MIT): https://github.com/HEnquist/rubato . Stateful sinc resampling.
+- mp3lame-encoder 0.2.5 and mp3lame-sys 0.1.11 (LGPL-3.0): https://github.com/DoumanAsh/mp3lame-encoder and https://github.com/DoumanAsh/mp3lame-sys . The latter includes matching LAME 3.100 sources. The native capability DLL statically incorporates LAME and the LGPL wrapper; its distribution must comply with their LGPL requirements, including source and the ability to rebuild/relink a modified library. The independently replaceable native DLL can be rebuilt from this public source and the Cargo.lock-pinned source distributions; the host/core remains MIT.
+- Windows Media Foundation is a Windows system facility; no external codec runtime is bundled for the Windows video pack. Additional Windows codecs/extensions retain their own terms.
 
-The bootstrap archive SHA-256 is pinned in scripts/setup-windows.ps1. Keep its bundled license, build configuration and dependency notices alongside redistributed DLLs; the packaging script copies those files from the archive. Shared codec DLLs remain replaceable and are not statically linked into the host. Replacing the bootstrap with another build requires reviewing that build's notices and source obligations. The bootstrap is a compatibility starting point, not a size-optimized runtime.
+Other Rust dependencies include anyhow/serde/serde_json/clap/image (MIT OR Apache-2.0), reqwest (MIT OR Apache-2.0), libloading (ISC), their TLS dependencies, and their transitive dependencies. Exact versions and source archive checksums are in Cargo.lock. License texts for the codec distributions are included under licenses in portable packages. Retain these notices when redistributing.
 
-Rust dependency versions are recorded in Cargo.lock. Dependencies include anyhow (MIT OR Apache-2.0), serde/serde_json (MIT OR Apache-2.0), libloading (ISC), clap (MIT OR Apache-2.0) and image (MIT OR Apache-2.0), with their transitive dependencies. Consult each crate's source distribution for its complete license text before redistributing a customized package.
+The tiny synthetic video/tone fixtures were generated for this project and are provided under the project's MIT license. They require no external media program to run tests. The original architecture proposal under docs/remedia.md discusses FFmpeg only as a comparison baseline and historical design context.

@@ -1,0 +1,104 @@
+{
+  "nodes": [
+    {
+      "id": "demux",
+      "component": "native.demux",
+      "settings": {
+        "source": "tests/fixtures/audio.wav",
+        "task": "audio",
+        "audio_rate": 16000,
+        "audio_channels": 1,
+        "hardware": false,
+        "threads": 2,
+        "timeout_ms": 30000,
+        "max_frame_bytes": 134217728,
+        "max_packet_bytes": 16777216
+      }
+    },
+    {
+      "id": "decode",
+      "component": "native.audio.decode",
+      "settings": {
+        "track": {
+          "index": 0,
+          "kind": "audio",
+          "codec": "pcm_s16le",
+          "time_base": {
+            "num": 1,
+            "den": 44100
+          },
+          "width": 0,
+          "height": 0,
+          "sample_rate": 44100,
+          "channels": 1,
+          "attached_picture": false,
+          "metadata": {},
+          "initialization": {
+            "bits_per_coded_sample": 16,
+            "bits_per_sample": 16,
+            "channel_mask": 1,
+            "channels": 1,
+            "codec_id": "0x108",
+            "extra_data": [],
+            "frames_per_block": 1,
+            "max_frames_per_packet": 1152,
+            "sample_rate": 44100
+          }
+        }
+      }
+    },
+    {
+      "id": "gain",
+      "component": "native.audio.gain",
+      "settings": {
+        "gain": 0.5
+      }
+    },
+    {
+      "id": "resample",
+      "component": "native.audio.resample",
+      "settings": {
+        "rate": 16000,
+        "channels": 1
+      }
+    },
+    {
+      "id": "wav",
+      "component": "native.wav.mux",
+      "settings": {
+        "rate": 16000,
+        "channels": 1
+      }
+    },
+    {
+      "id": "file",
+      "component": "native.file.sink",
+      "settings": {
+        "path": "target/example-audio.wav"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "to": "decode",
+      "from": "demux",
+      "stream_id": 0
+    },
+    {
+      "to": "gain",
+      "from": "decode"
+    },
+    {
+      "to": "resample",
+      "from": "gain"
+    },
+    {
+      "to": "wav",
+      "from": "resample"
+    },
+    {
+      "to": "file",
+      "from": "wav"
+    }
+  ]
+}

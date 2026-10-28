@@ -1,17 +1,15 @@
-# Plugin ABI v1
+# Component ABI v2
 
-Canonical definitions: `crates/remdia-plugin-abi/src/lib.rs` and `include/remdia.h`.
+Canonical definitions: `crates/remdia-plugin-abi/src/lib.rs` and `include/remdia.h`. V2 intentionally rejects the previous fused-session ABI.
 
-- Symbol: `remdia_plugin_query_v1`. Query takes the host table size and ABI major/minor, returns a versioned immutable function table. Unknown major or insufficient table size is rejected before writes. Future minor versions may only append fields and must check available size.
-- ABI portability is within the same OS, architecture and C platform ABI. `size_t`/usize reflects that platform. Manifests must match OS/arch before loading. Rust String/Vec/trait objects never cross the boundary.
-- V1 exports fused sessions: open, next, seek/reset, artwork, bounded mono-16k f32le MP3 encoding and close. Status 0=output, 1=EOF, -1=error, -2=contained panic. No asynchronous pending state is advertised; a later component ABI must add it explicitly.
-- Request and metadata schemas are the serde JSON types in remdia-types. JSON is control data only; media planes travel as borrowed byte views. `open` returns MediaInfo JSON; next/artwork/encode return tagged FrameInfo JSON; errors contain an `error` string.
-- Request pointers are borrowed for the duration of the call. A session may retain only the Control context/callback, which stays valid through close. Control is callable from the session's I/O operations; it returns nonzero on cancellation.
-- All successful outputs and errors start with a fresh initialized Output. A nonempty View must point to valid readable memory. Output metadata is limited to 1 MiB. Plane bytes must remain immutable until release and honor the request's size limits. PCM is little-endian packed f32; video includes stride and row count for each plane.
-- `owner` and `release` transfer exactly one output reference. Hosts call release once, even on errors. Only the original module frees its allocation. Output data and callbacks may outlive the session, and the release callback must be safe on any thread. Hosts may share immutable views across threads, and may not access them after release. No host pointer can be retained by an output destructor.
-- Sessions are thread confined and all session calls are serialized. close is called exactly once on a non-null successfully created handle. No call may use a closed/null handle. encode_mp3 has no session state; input is nonempty, finite f32 mono at 16kHz, at most 120 seconds.
-- `seek` resets demux/decoder/resampler state but does not revoke existing outputs. Host generations prevent old frames from entering the new timeline.
-- Plugins must contain Rust panics/native exceptions at every boundary, including output destructors. OOM aborts and native memory corruption cannot be contained in-process. Native plugins are trusted code, not sandboxed data.
-- Code stays loaded until process exit. Releasing instances never unloads a library. Restart the host to replace an installed DLL.
-
-FFmpeg's [send/receive contract](https://ffmpeg.org/doxygen/trunk/group__lavc__encdec.html) underpins the compatibility pack; [Rust ABI is not stable](https://doc.rust-lang.org/reference/items/external-blocks.html#abi), so only C data and function tables are exported.
+- Export `remdia_plugin_query_v2(Header host, PluginApi *out)`. Major mismatch or insufficient function-table size is rejected before writing. Minor extensions may append fields only and must respect host struct_size.
+- Factories: describe returns ComponentDescriptor JSON; create takes NodeConfig JSON and returns NodeInfo plus an opaque instance. Manifests provide lazy-discovery hints and must match the real DLL factory list.
+- Dataflow: submit borrows an Input, receive returns an Output, drain ends input, reset clears state under a generation/target, command provides bounded auxiliary requests such as artwork, close destroys the instance.
+- Status: 0=accepted/output, 1=EOF/no auxiliary result, 2=NEED_INPUT, 3=WOULD_BLOCK, -1=error, -2=contained panic, -3=read/seek interruption. WOULD_BLOCK consumes nothing. A synchronous component must expose a progress path; it cannot reject both receive and submit forever. No asynchronous GPU/PENDING capability is advertised.
+- Input JSON is a BufferHeader. Its media planes are immutable borrowed bytes. The caller retains its reference; a component retaining bytes past submit explicitly calls retain(owner) and eventually release(owner). No Rust String, Vec, Arc or trait object crosses the ABI. The SDK uses PacketRef to avoid copying compressed audio input.
+- Output JSON is a BufferHeader (or control result for create/describe). Every nonempty plane must remain readable through release. Output owns one owner/release reference; release can run on any thread and after component close. Owners must retain all modules, allocators and storage they need, and must never retain a host Control context through frame destruction.
+- The host bounds metadata to 1 MiB and reserves advertised max_output_bytes before receive. Nodes validate PCM lengths and video plane strides/rows. Packets preserve integer/rational PTS/DTS, duration, trim values and stream ID.
+- Components are thread confined, and calls are serialized. Control context/callback remains live through close. Poll returns 0=run, 1=cancel, 2=preempt current operation for a new seek. The host acknowledges interruption before the next worker operation.
+- reset applies to sources, decoders and filters; active export mux/sink nodes can reject it, requiring a new output graph. EOF propagates only after queued inputs drain. Container Bytes output may carry an absolute offset for header patches; sinks must support it.
+- All boundaries, including destructors, contain Rust panics. In-process native code is trusted; memory corruption and aborts cannot be sandboxed by the ABI. Libraries remain pinned until process exit.
+- Compatibility is within the same OS, architecture and platform C ABI. size_t reflects that platform. The v2 JSON schema is defined by remdia-types and remdia-graph.

@@ -60,6 +60,16 @@ impl Budget {
         self.0.peak.load(Ordering::Relaxed)
     }
 }
+impl Reservation {
+    pub fn shrink(&mut self, bytes: usize) {
+        assert!(bytes <= self.bytes);
+        self.budget
+            .0
+            .used
+            .fetch_sub(self.bytes - bytes, Ordering::AcqRel);
+        self.bytes = bytes;
+    }
+}
 impl Drop for Reservation {
     fn drop(&mut self) {
         self.budget.0.used.fetch_sub(self.bytes, Ordering::AcqRel);

@@ -1,98 +1,86 @@
 # remdia
 
-Windows 优先的模块化媒体 SDK。参考 [remedia 架构提案](docs/remedia.md)，首版聚焦 [replayer](https://github.com/L-Chris/replayer) 当前使用的媒体能力。
+**不依赖 FFmpeg 的模块化媒体框架。** Rust SDK 和 CLI 使用可组合的 demux / decoder / filter / encoder / mux / sink 插件图，当前以 Windows 上的 replayer 接入为目标。
 
-Rust 核心负责任务规划、输出缓冲预算、取消与 seek generation；媒体后端通过版本化 C ABI 动态加载。首个能力包使用 FFmpeg 9，核心与 CLI 不链接 FFmpeg。**v0.1 是可运行的 SDK/CLI 起点，不是完整播放器，也不是 FFmpeg 的完整替代品。**
+## 架构
 
-## 首版能力
+```text
+                               ┌→ audio decoder → resample → audio output
+file / HTTP → Rust demux ───────┤
+                               └→ Windows MFT decoder → native NV12 → renderer
 
-| 能力 | 接口 / 行为 |
+file / HTTP → demux → audio decoder → gain → resample → WAV mux → file sink
+                  └→ compressed packet copy → MP3 mux → file sink
+```
+
+组件通过稳定平台 C ABI v2 独立注册和创建。一个图中的节点可以来自不同 DLL；只有输入/输出类型、格式、采样率等约束兼容的连接才允许执行。运行时校验 DAG、逐轨路由、下游优先调度、有界边队列、EOF 排空和 seek generation。没有隐藏的 FFmpeg 回退。
+
+| 能力包 | 独立组件 |
 | --- | --- |
-| 媒体探测 | 容器、轨道、编码、时长、起始时间、标签；不启动解码器 |
-| 视频 / 音乐解码 | 本地文件、FFmpeg 支持的 HTTP(S) / Range 输入；按需返回帧 |
-| Windows 硬解 | 尝试 D3D11VA，创建失败可回退软件；实际硬解状态逐帧报告 |
-| 视频数据 | 原生 CPU plane、stride、SAR、色彩信息；缩略图单独转换 RGBA |
-| 音频数据 | 重采样 / 混音为指定采样率的 f32le 单声道 / 立体声 |
-| seek / EOF | 整数时间、解码预滚、音频样本裁剪、generation、解码器与重采样器排空 |
-| 封面 / 缩略图 | 有界提取原始内嵌封面；按时间生成最大 600px RGBA 缩略图 |
-| 字幕音频 | 独立音轨会话、16kHz 单声道有界分段、WAV、带 Xing/LAME 延迟和填充信息的 MP3 |
-| 资源与取消 | 输出预算预留、保留帧背压、跨线程取消、I/O 超时、线程配置 |
+| `native` | Symphonia demux、音频 decoder、sinc 重采样/混音、音量滤镜、RGBA 缩放、WAV mux、LAME MP3 encoder、压缩 packet 复制、MP3 elementary mux、文件 sink |
+| `windows` | Media Foundation 同步视频 decoder，输入压缩 packet，输出 CPU NV12 |
 
-格式是否可用取决于安装的能力包、FFmpeg 构建和设备，扩展名不代表支持承诺。HTTP seek 需要源端可 seek；下载缓存、鉴权、QQ 解密和 torrent 桥继续由应用提供。参见 [replayer 对照表](docs/replayer-scope.md)。
+音频支持由 Symphonia 和独立 libopus 提供：MP3、FLAC、WAV/PCM、AAC-LC、ALAC、Vorbis、Opus 等。Rust demux 支持 MP4/MOV、MKV/WebM、Ogg、WAV、FLAC、MP3、AIFF、CAF 的已识别流。Windows 视频首要验收路径是 MP4/MKV 的 H.264；HEVC/VP8/VP9 等取决于系统已安装的 MFT，不能仅凭扩展名承诺可播放。Symphonia 的视频参数支持仍使用其 experimental feature，版本固定在 Cargo.lock。
 
-## Windows x64 构建
+**当前 Windows 视频使用同步软件 MFT。** 暂未接入异步硬件 MFT、D3D surface 共享或 HDR 色调映射；`hardware_decoded` 如实返回 false。该边界优先保证无需 FFmpeg 的组件拆分和播放器接入可验证。
 
-需要 Rust stable、Visual Studio C++ Build Tools、LLVM（含 `libclang.dll`）、Python 3 和 PowerShell。
+## 构建与运行
+
+Windows x64 需要 Rust stable、Visual Studio C++ Build Tools、CMake 和 Python 3。无需 FFmpeg、libclang、额外编解码 DLL 或 FFmpeg 开发包。
 
 ```powershell
 ./scripts/build-windows.ps1 -Release
 ./dist/remdia/remdia.exe plugins
-./dist/remdia/remdia.exe probe 'D:\media\movie.mkv'
-./dist/remdia/remdia.exe plan 'D:\media\movie.mkv'
-./dist/remdia/remdia.exe decode 'D:\media\movie.mkv' --frames 300
-./dist/remdia/remdia.exe thumbnail 'D:\media\movie.mkv' thumb.png --at-us 10000000
-./dist/remdia/remdia.exe extract 'D:\media\movie.mkv' speech.mp3 --start-us 30000000 --duration-us 30000000
+./dist/remdia/remdia.exe probe 'D:\media\movie.mp4'
+./dist/remdia/remdia.exe decode 'D:\media\movie.mp4' --frames 300
+./dist/remdia/remdia.exe thumbnail 'D:\media\movie.mp4' thumb.png --at-us 1000000
+./dist/remdia/remdia.exe extract 'D:\media\movie.mp4' speech.mp3 --start-us 30000000 --duration-us 30000000
+./dist/remdia/remdia.exe graph examples/audio-to-wav.json
 ```
 
-打包输出：`dist/remdia-windows-x86_64.zip` 和 `dist/SHA256SUMS.txt`。编解码 DLL 与可执行文件同目录，插件位于 `plugins/`。脚本下载固定 SHA-256 的 FFmpeg 开发包；需要联网。`--plugins PATH` 或 `REMDIA_PLUGIN_DIR` 可指定受信任插件目录。时间参数均为整数微秒。
+输出：`dist/remdia-windows-x86_64.zip`。`plugins/` 同时包含 `native`、`windows` DLL 及 manifest。CLI 通过自身目录寻找插件，也可用 `--plugins PATH` / `REMDIA_PLUGIN_DIR` 指定。时间参数为整数微秒。
 
-`decode` 是不带音视频设备的解码诊断工具；音频设备、播放时钟、WGPU 展示、暂停和音量由宿主负责。`plan` 读取 manifest 生成结构计划，不加载 DLL、不联网探测，也不宣称已验证某个文件或 GPU 的兼容性。
+`graph` 接受用户定义的 JSON 图，支持串接、逐轨分支、扇出、滤镜顺序调整、绕过 decoder 的压缩流路径。文件 sink 不覆盖已有目标；写到临时文件，mux 排空后发布。WAV mux 在结尾通过带 offset 的输出修正 RIFF 头。MP3 packet mux 输出 elementary stream，重新封装的流不承诺保留原始 ID3/Xing/gapless 信息；MP3 encoder 则写入新的 LAME 延迟/填充标签。
+
+`plan` 是不加载 DLL、不打开文件的结构探测计划；`Session::plan()` 是已探测轨道后实际执行的组件图。SDK 可通过 `Engine::graph()` 执行任意兼容图，不局限于播放场景。
 
 ## Rust SDK
 
 ```rust,no_run
-use remdia::{Cancellation, Engine, FrameInfo, Request};
+use remdia::{Cancellation, Engine, Request};
 # fn main() -> anyhow::Result<()> {
 let engine = Engine::discover("plugins", 256 * 1024 * 1024)?;
-let cancel = Cancellation::default();
-// Native plugins execute code; load only a trusted capability pack.
+// Native capability packs execute code and must be trusted.
 let mut session = unsafe {
-    engine.open(Request::playback("movie.mkv"), cancel.clone())?
+    engine.open(Request::playback("movie.mp4"), Cancellation::default())?
 };
+println!("{}", serde_json::to_string_pretty(session.plan())?);
 while let Some(frame) = session.read()? {
-    match frame.info() {
-        FrameInfo::Video { planes, .. } => {
-            // Upload native planes using their strides; the frame owns their lifetime.
-            let _y_plane = frame.plane(0);
-            let _stride = planes[0].stride;
-        }
-        FrameInfo::Audio { rate, channels, .. } => {
-            // Feed f32le PCM into the application's bounded audio device queue.
-            let _pcm = frame.bytes();
-            let _ = (rate, channels);
-        }
-        _ => {}
-    }
+    // FrameInfo describes native planes or f32le PCM. Buffers remain valid
+    // after a session closes, and can be shared with the rendering thread.
+    let _ = (frame.info(), frame.plane(0));
 }
 # Ok(()) }
 ```
 
-在媒体 worker 上创建会话；`Session` 不跨线程共享，`Frame` 可只读共享到渲染线程，`Cancellation` 可从 UI 调用。帧可比会话活得更久。帧的 clone 共享一次预算预留；持有过多帧会在下一次读取前返回预算不足，不会等待唯一消费线程。seek 后宿主应丢弃旧 generation 的已排队帧。
+SDK Session、图和组件留在创建它们的工作线程；只读帧与取消 token 可跨线程。每个节点使用 submit/receive 分离协议，WOULD_BLOCK 不消费输入。宿主以 retain/release 显式传递输入引用，跨 DLL 不传 Rust allocator 对象。
+
+受管理预算覆盖图输出及边队列持有的缓冲、分段 PCM；队列还分别限制数量和媒体时长。预留不足时不会消费输入。跨组件包装可能保守重复计入共享数据，且编解码器内部、系统驱动、临时导出等不属于整个进程 RSS 的硬上限。没有相对 FFmpeg 的性能或包体收益承诺。
 
 ## 验证
 
 ```powershell
-. ./scripts/setup-windows.ps1
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
 cargo build --workspace --locked
 python scripts/stage.py
-python scripts/fixtures.py --ffmpeg $env:REMDIA_TEST_FFMPEG
+python scripts/fixtures.py
 $env:REMDIA_TEST_PLUGIN_DIR = "$PWD/dist/remdia/plugins"
 $env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
 cargo test --workspace --locked -- --include-ignored
+python scripts/audit-package.py dist/remdia
 ```
 
-集成测试需要真实插件和生成语料，默认标记 ignored；Windows CI 会执行它们，并在清理 FFmpeg 构建路径后验证 ZIP。包含 B 帧计数、重采样排空、精确范围、MP3 gapless、非零时间原点、封面、缩略图、坏文件、预算和取消。CI 无可用 GPU，D3D11VA 实际硬解仍需 Windows 实机验收。macOS/Linux 可用于开发验证，首版发布目标仅 Windows x64。
+语料已提交在 `tests/fixtures`，构建和测试均无需外部媒体工具。测试覆盖音频格式、范围裁剪、重采样与 gapless 尾部、MP3、封面、滤镜扇出、WAV finalize、预算、取消，以及 Windows 跨 DLL 的 packet → MFT → NV12 路径。CI 额外用独立 C 宿主检验 ABI，并在移除构建环境 PATH 后运行便携包。Windows x64 是视频发布目标；macOS/Linux 可验证 Rust 音频与图。
 
-## 边界与后续
-
-- 首版是融合的 session 能力包；尚未拆成任意组合的 demux/decoder/filter/mux 插件图。
-- 暂无转封装、通用视频编码、GPU 共享纹理、Media Foundation、运行中卸载插件。
-- 原生视频保持色彩描述，不完成 HDR 色调映射和显示色彩管理。
-- 预算限制输出 plane 预留和分段 PCM，不限制 FFmpeg/驱动私有内存或整个进程 RSS。框架不默认积压解码帧。
-- 尚无相对等能力 FFmpeg 的性能、内存或包体收益结论。
-- 未修改或迁移现有 replayer；[接入说明](docs/replayer-scope.md) 给出替换边界。
-
-设计与 ABI 契约见 [architecture](docs/architecture.md)、[plugin ABI](docs/plugin-abi.md)。remdia 源码采用 MIT；编解码依赖遵循各自许可证，见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+[架构](docs/architecture.md) · [插件 ABI](docs/plugin-abi.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [第三方许可](THIRD_PARTY.md)

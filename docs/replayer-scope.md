@@ -1,19 +1,19 @@
-# replayer 首版范围与接入
+# replayer integration
 
-参考源是本工作区 `replayer` 的 `src/media.rs`、`src/player/{demux,video,audio}.rs`、`src/subtitles/{audio,mp3}.rs`。此次新建独立仓库，不改动原应用及其未提交改动。
+Windows replayer now uses remdia's public component graph for playback, metadata/cover extraction, thumbnails, independent subtitle PCM, MP3 encoding and downloaded-audio validation. Its Windows target has no ffmpeg-next dependency. The existing CPAL device callback, playback clock and WGPU conversion shader are retained.
 
-| replayer 位置 | remdia 接口 | 应用仍负责 |
-| --- | --- | --- |
-| media::probe_info / info | Probe session、MediaInfo、artwork | sidecar 标签、图片解码与本地库缓存 |
-| media::video_thumbnail | Thumbnail session、seek、RGBA planes | 图片展示与缩略图采样策略 |
-| player::demux / video | Playback session、read、seek、generation | 命令队列、旧帧丢弃、视频调度 |
-| player::audio | Audio frame、可配置采样率、mono/stereo f32le | CPAL 输出、音频时钟、音量、设备恢复 |
-| subtitles::AudioChunks | 独立 Audio session、audio_chunk | AI 任务调度、静音切分、重试 |
-| subtitles::mp3 / Chunk::wav | encode_mp3 / AudioChunk::wav | HTTP 请求与字幕文本处理 |
-| media_source / torrent | 将准备后的路径或 loopback URL 传入 source | QQ 解密、请求凭据、下载缓存、torrent 读门控 |
+| Host subsystem | remdia path |
+| --- | --- |
+| Playback worker | native.demux → native.audio.decode → native.audio.resample; native.demux → windows.video.decode |
+| Frame presentation | Read-only remdia frame planes → WGPU native NV12, with a CPU fallback |
+| Probe / cover | native.demux metadata and artwork command; no decoder created |
+| Thumbnail | native.demux → windows.video.decode → native.video.rgba |
+| Subtitle extraction | Independent mono 16kHz Audio graph; range seek and bounded chunks |
+| MP3 requests | Standalone native.mp3.encode factory; final delay/padding tag patch |
+| QQ / torrent / online music | Application prepares a local file or loopback HTTP URL; remdia handles bounded Range reads |
 
-集成顺序：先把字幕独立输入替换为 `Task::Audio`；再替换探测与缩略图；最后在媒体 worker 中替换解码部分。保留 replayer 已验证的 CPAL/WGPU/clock 代码。Native Video metadata 中包含 pixel format、各 plane stride、SAR 和色彩字段；音频 `bytes()` 是 packed little-endian f32，不要假定其地址满足 f32 对齐，使用字节转换或无对齐读取。
+A media graph stays on its owning worker. The subtitle scheduler transfers an input/configuration ticket and creates a new graph on the decode thread, rather than moving live component handles. UI cancellation/seek interruption uses a shared token. The host owns pause, volume, clocks, output-device recovery and generation filtering; the backend never opens an audio device or renders a window.
 
-应用持有取消 token，通过现有后台任务创建和关闭 Session。seek 返回新的 generation，视频队列与音频 ring buffer 都应按 generation 失效。read() 为拉取接口，宿主在自己的有界队列有空位时再调用；不要在 UI 主线程调用。
+The replayer Windows package must include both native/windows DLLs and manifests under plugins, using a pinned remdia revision. Existing macOS releases retain their old backend until a native video pack is implemented there; remdia itself has no FFmpeg dependencies on any target. The remdia-media feature enables the portable integration path for audio/host validation on other development machines.
 
-v0.1 不是直接二进制替换 `ffmpeg-next` 的兼容层；迁移需要适配上述接口，并重新执行 replayer 的 seek、短音轨、无声视频、网络阻塞、设备丢失、字幕范围等测试。此次仓库的集成语料验证了 SDK 行为，不能代替完整应用验收。
+The initial Windows certification target is H.264 MP4/MKV plus common music formats. System-codec absence, unsupported video codecs, hardware acceleration and unusual container variants remain explicit limitations, not silent fallback to FFmpeg. Full historical format parity with replayer's old FFmpeg build is not claimed.

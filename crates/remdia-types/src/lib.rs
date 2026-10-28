@@ -96,6 +96,8 @@ pub struct Track {
     pub channels: u16,
     pub attached_picture: bool,
     pub metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    pub initialization: serde_json::Value,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MediaInfo {
@@ -113,6 +115,19 @@ pub struct Plane {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FrameInfo {
+    Packet {
+        pts: i64,
+        dts: i64,
+        duration: u64,
+        time_base: Rational,
+        trim_start: u64,
+        trim_end: u64,
+        keyframe: bool,
+    },
+    Bytes {
+        format: String,
+        offset: Option<u64>,
+    },
     Video {
         pts_us: Option<i64>,
         duration_us: i64,

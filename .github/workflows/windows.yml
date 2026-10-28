@@ -51,7 +51,7 @@ jobs:
       - name: Integration fixtures and native DLL tests
         shell: pwsh
         run: |
-          python scripts/fixtures.py --ffmpeg $env:REMDIA_TEST_FFMPEG
+          python scripts/fixtures.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:REMDIA_TEST_PLUGIN_DIR = "$PWD/dist/remdia/plugins"
           $env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
@@ -59,7 +59,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./target/abi-smoke.exe "$PWD/dist/remdia/plugins/remdia_backend_ffmpeg.dll" "$PWD/target/fixtures/probe.json"
+          ./target/abi-smoke.exe "$PWD/dist/remdia/plugins/remdia_backend_native.dll" "$PWD/target/fixtures/probe.json"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/network-smoke.py --exe dist/remdia/remdia.exe --fixtures target/fixtures
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -68,7 +68,7 @@ jobs:
         run: |
           $stage = Join-Path $env:RUNNER_TEMP 'remdia-smoke'
           Expand-Archive dist/remdia-windows-x86_64.zip $stage
-          $media = (Resolve-Path target/fixtures/av.mkv).Path
+          $media = (Resolve-Path target/fixtures/av.mp4).Path
           $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
           & "$stage/remdia.exe" decode $media --software --frames 1000
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package decode failed' }
