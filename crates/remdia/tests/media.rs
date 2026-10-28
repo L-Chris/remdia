@@ -213,11 +213,16 @@ fn cancellation_interrupts_blocked_network_open() {
     worker.join().unwrap();
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
-#[ignore = "requires Windows MFT decoder and staged component packs"]
-fn video_packets_cross_dlls_to_windows_decoder_and_seek() {
+#[ignore = "requires a platform video decoder and staged component packs"]
+fn video_packets_cross_dlls_to_platform_decoder_and_seek() {
     let e = engine();
+    let component = if cfg!(windows) {
+        "windows.video.decode"
+    } else {
+        "macos.video.decode"
+    };
     for name in ["av.mp4", "av.mkv"] {
         let mut s = open(&e, name, Task::Playback);
         assert!(
@@ -232,14 +237,14 @@ fn video_packets_cross_dlls_to_windows_decoder_and_seek() {
                 .graph
                 .nodes
                 .iter()
-                .any(|n| n.config.component == "windows.video.decode")
+                .any(|n| n.config.component == component)
         );
         let decoder = s
             .plan()
             .graph
             .nodes
             .iter()
-            .find(|n| n.config.component == "windows.video.decode")
+            .find(|n| n.config.component == component)
             .unwrap();
         let graph = unsafe { e.graph(&s.plan().graph, Cancellation::default()) }.unwrap();
         assert!(

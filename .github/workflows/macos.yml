@@ -1,0 +1,68 @@
+name: macOS
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            arch: aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: command -v cmake || brew install cmake
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: macos-sdk-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: macos-sdk-${{ matrix.target }}-
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: ./scripts/build-macos.sh --release --target '${{ matrix.target }}'
+      - name: Real dylib, C host and network tests
+        run: |
+          python3 scripts/fixtures.py
+          export REMDIA_TEST_PLUGIN_DIR="$PWD/dist/remdia/plugins"
+          export REMDIA_TEST_FIXTURES="$PWD/target/fixtures"
+          cargo test --workspace --locked -- --include-ignored
+          clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke
+          ./target/abi-smoke "$PWD/dist/remdia/plugins/libremdia_backend_native.dylib" "$PWD/target/fixtures/probe.json"
+          python3 scripts/network-smoke.py --exe dist/remdia/remdia --fixtures target/fixtures
+      - name: Relocated CLI with system-only PATH
+        run: |
+          media="$PWD/tests/fixtures/av.mp4"
+          moved="$RUNNER_TEMP/remdia relocated"
+          mkdir -p "$moved"
+          ditto -x -k 'dist/remdia-macos-${{ matrix.arch }}.zip' "$moved"
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin "$moved/remdia" decode "$media" --software --frames 1000
+          PATH=/usr/bin:/bin:/usr/sbin:/sbin "$moved/remdia" extract "$media" "$moved/speech.mp3" --duration-us 1000000
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remdia-macos-${{ matrix.arch }}
+          path: |
+            dist/remdia-macos-*.zip
+            dist/SHA256SUMS-macos-*.txt
+          if-no-files-found: error

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce the FFmpeg-free dependency and Windows binary import boundary."""
+"""Enforce the FFmpeg-free dependency and platform binary import boundary."""
 import argparse
 import re
 import subprocess
@@ -48,4 +48,14 @@ for path in files:
     if path.suffix.lower() in ('.dll', '.exe'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)
-print('Dependency graph and package contain no FFmpeg; Windows CRT is static')
+    elif path.is_file() and (path.suffix == '.dylib' or path.name == 'remdia'):
+        lines = subprocess.check_output(['otool','-L',str(path)],text=True).splitlines()[1:]
+        own = subprocess.check_output(['otool','-D',str(path)],text=True).splitlines()[1:]
+        own = own[0].strip() if own else None
+        for line in lines:
+            dep = line.strip().split(' (compatibility version',1)[0]
+            if dep == own: continue
+            assert dep.startswith(('/System/Library/','/usr/lib/')), (path,dep)
+            assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)',dep,re.I),(path,dep)
+        subprocess.check_call(['codesign','--verify','--strict',str(path)])
+print('Dependency graph and packaged binaries are FFmpeg-free; only platform runtime dependencies')

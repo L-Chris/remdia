@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage a CLI and capability pack; FFmpeg dependencies remain optional inputs."""
+"""Stage the FFmpeg-free CLI and platform capability packs."""
 import argparse
 import json
 import platform
@@ -22,6 +22,9 @@ plugins = out / 'plugins'
 plugins.mkdir(parents=True, exist_ok=True)
 os_name = {'Windows': 'windows', 'Darwin': 'macos', 'Linux': 'linux'}[platform.system()]
 arch = {'AMD64': 'x86_64', 'x86_64': 'x86_64', 'arm64': 'aarch64', 'aarch64': 'aarch64'}[platform.machine()]
+if a.target:
+    arch = a.target.split('-')[0]
+    os_name = 'windows' if 'windows' in a.target else 'macos' if 'apple-darwin' in a.target else 'linux'
 exe = 'remdia.exe' if os_name == 'windows' else 'remdia'
 def copy_binary(source, destination):
     if destination.exists():
@@ -32,8 +35,9 @@ copy_binary(build / exe, out / exe)
 for pack, capabilities in [
     ('native', ['native.demux', 'native.audio.decode', 'native.audio.resample', 'native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.mp3.encode', 'native.packet.copy', 'native.mp3.mux', 'native.file.sink']),
     ('windows', ['windows.video.decode']),
+    ('macos', ['macos.video.decode']),
 ]:
-    if pack == 'windows' and os_name != 'windows':
+    if pack in ('windows', 'macos') and pack != os_name:
         continue
     library = {'windows': f'remdia_backend_{pack}.dll', 'macos': f'libremdia_backend_{pack}.dylib', 'linux': f'libremdia_backend_{pack}.so'}[os_name]
     copy_binary(build / library, plugins / library)

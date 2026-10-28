@@ -1,13 +1,13 @@
 # remdia
 
-**不依赖 FFmpeg 的模块化媒体框架。** Rust SDK 和 CLI 使用可组合的 demux / decoder / filter / encoder / mux / sink 插件图，当前以 Windows 上的 replayer 接入为目标。
+**不依赖 FFmpeg 的模块化媒体框架。** Rust SDK 和 CLI 使用可组合的 demux / decoder / filter / encoder / mux / sink 插件图，支持 Windows Media Foundation 与 macOS VideoToolbox，供 replayer 共用同一套媒体图。
 
 ## 架构
 
 ```text
                                ┌→ audio decoder → resample → audio output
 file / HTTP → Rust demux ───────┤
-                               └→ Windows MFT decoder → native NV12 → renderer
+                               └→ Windows MFT / macOS VideoToolbox decoder → native NV12 → renderer
 
 file / HTTP → demux → audio decoder → gain → resample → WAV mux → file sink
                   └→ compressed packet copy → MP3 mux → file sink
@@ -18,9 +18,12 @@ file / HTTP → demux → audio decoder → gain → resample → WAV mux → fi
 | 能力包 | 独立组件 |
 | --- | --- |
 | `native` | Symphonia demux、音频 decoder、sinc 重采样/混音、音量滤镜、RGBA 缩放、WAV mux、LAME MP3 encoder、压缩 packet 复制、MP3 elementary mux、文件 sink |
-| `windows` | Media Foundation 同步视频 decoder，输入压缩 packet，输出 CPU NV12 |
+| `windows` | Media Foundation 同步软件视频 decoder，输入压缩 packet，输出 CPU NV12 |
+| `macos` | VideoToolbox 同步完成视频 decoder，硬解 Auto / 软件模式，输出 CPU NV12 |
 
 音频支持由 Symphonia 和独立 libopus 提供：MP3、FLAC、WAV/PCM、AAC-LC、ALAC、Vorbis、Opus 等。Rust demux 支持 MP4/MOV、MKV/WebM、Ogg、WAV、FLAC、MP3、AIFF、CAF 的已识别流。Windows 视频首要验收路径是 MP4/MKV 的 H.264；HEVC/VP8/VP9 等取决于系统已安装的 MFT，不能仅凭扩展名承诺可播放。Symphonia 的视频参数支持仍使用其 experimental feature，版本固定在 Cargo.lock。
+
+macOS 支持 macOS 15+ 的 Apple Silicon 与 Intel，H.264 SDR MP4/MKV 已验证；HEVC SDR 取决于系统能力，Main10/HDR/隔行输入明确拒绝。VideoToolbox 使用同步完成模式并按参数集声明的上界重排 B 帧；硬解请求与实际硬解结果分别记录。CPU 平面可跨线程使用，Metal/IOSurface 零拷贝留待后续。
 
 **当前 Windows 视频使用同步软件 MFT。** 暂未接入异步硬件 MFT、D3D surface 共享或 HDR 色调映射；`hardware_decoded` 如实返回 false。该边界优先保证无需 FFmpeg 的组件拆分和播放器接入可验证。
 
@@ -37,6 +40,15 @@ Windows x64 需要 Rust stable、Visual Studio C++ Build Tools、CMake 和 Pytho
 ./dist/remdia/remdia.exe extract 'D:\media\movie.mp4' speech.mp3 --start-us 30000000 --duration-us 30000000
 ./dist/remdia/remdia.exe graph examples/audio-to-wav.json
 ```
+
+macOS 需要 Rust、Apple Command Line Tools、CMake 和 Python 3：
+
+```bash
+./scripts/build-macos.sh --release
+./dist/remdia/remdia decode tests/fixtures/av.mp4 --frames 1000
+```
+
+产物按架构发布为 `remdia-macos-aarch64.zip` / `remdia-macos-x86_64.zip`。主程序与插件仅链接系统运行库；无需 FFmpeg 或 Homebrew 编解码动态库。
 
 输出：`dist/remdia-windows-x86_64.zip`。Windows x64 配置静态链接 MSVC 运行库；CLI 和组件 DLL 无需另装 VC Redistributable。`plugins/` 同时包含 `native`、`windows` DLL 及 manifest。CLI 通过自身目录寻找插件，也可用 `--plugins PATH` / `REMDIA_PLUGIN_DIR` 指定。时间参数为整数微秒。
 
@@ -81,6 +93,6 @@ cargo test --workspace --locked -- --include-ignored
 python scripts/audit-package.py dist/remdia
 ```
 
-语料已提交在 `tests/fixtures`，构建和测试均无需外部媒体工具。测试覆盖音频格式、范围裁剪、重采样与 gapless 尾部、MP3、封面、滤镜扇出、WAV finalize、预算、取消，以及 Windows 跨 DLL 的 packet → MFT → NV12 路径。CI 额外用独立 C 宿主检验 ABI，并在移除构建环境 PATH 后运行便携包。Windows x64 是视频发布目标；macOS/Linux 可验证 Rust 音频与图。
+语料已提交在 `tests/fixtures`，构建和测试均无需外部媒体工具。测试覆盖音频格式、范围裁剪、重采样与 gapless 尾部、MP3、封面、滤镜扇出、WAV finalize、预算、取消，以及 Windows 跨 DLL 的 packet → MFT → NV12 路径。CI 额外用独立 C 宿主检验 ABI，并在移除构建环境 PATH 后运行便携包。Windows x64、macOS aarch64/x86_64 是视频发布目标；Linux 可验证通用音频与图。
 
-[架构](docs/architecture.md) · [插件 ABI](docs/plugin-abi.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [第三方许可](THIRD_PARTY.md)
+[架构](docs/architecture.md) · [插件 ABI](docs/plugin-abi.md) · [macOS 设计](docs/macos-integration-design.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [第三方许可](THIRD_PARTY.md)

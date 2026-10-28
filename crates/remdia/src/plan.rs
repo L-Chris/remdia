@@ -49,7 +49,11 @@ impl Plan {
             for track in selected {
                 let id = format!("decode_{}", track.index);
                 let component = if track.kind == "video" {
-                    "windows.video.decode"
+                    match std::env::consts::OS {
+                        "windows" => "windows.video.decode",
+                        "macos" => "macos.video.decode",
+                        os => anyhow::bail!("no default video decoder for {os}"),
+                    }
                 } else {
                     "native.audio.decode"
                 };

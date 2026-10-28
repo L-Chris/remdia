@@ -10,6 +10,7 @@ remdia-cli / replayer -> remdia playback facade / public Engine::graph
                                   ^
         native pack: Rust demux, audio decoder, filters, encoder, mux, sink
         Windows pack: independent Media Foundation video decoder
+        macOS pack: independent VideoToolbox video decoder
 ```
 
 A capability pack registers multiple independent factories. Components are created individually, and every graph node owns its own submit/receive/drain/reset state. Media samples cross DLLs as immutable byte views with explicit retain/release callbacks. Native code remains loaded for the process lifetime. A session is a convenience graph builder; it does not contain a second, fused implementation.
@@ -35,3 +36,6 @@ Seek records known random-access points and, for H.264/HEVC, searches preceding 
 Symphonia 0.6 provides Rust demux and audio codecs, with an independent libopus adapter for Opus. Audio filters and WAV muxing are Rust. MP3 encoding uses the standalone LAME library and patches a final Xing/LAME frame; it does not use an FFmpeg wrapper.
 
 Windows video consumes demuxed compressed packets directly via IMFTransform. AVC/HEVC configuration records and length-prefixed samples are converted to Annex B inside the decoder adapter. Input/output are separate, MFT stream changes renegotiate output, and draining emits reordered B-frames. The output adapter crops alignment padding using the MFT [display aperture](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mt-minimum-display-aperture-attribute), preserving visible image dimensions in CPU NV12 planes. The current implementation selects synchronous software MFTs and CPU NV12; hardware MFT/device sharing and HDR are separate future work. Codec availability is an OS capability, with explicit failure rather than FFmpeg fallback.
+
+
+macOS uses VideoToolbox through a private C bridge in its capability dylib. The core has no Apple framework dependency. Both asynchronous and temporal decode flags are clear, making callback completion part of each decode invocation; hardware selection is independent of this completion mode. Packet configuration preserves avcC/hvcC NAL prefixes. H.264 SPS/HEVC SPS parsers provide a safe presentation reorder bound, with an Annex-A DPB fallback for AVC configurations without bitstream restrictions. Retained pixel buffers remain bounded by count and bytes, are mapped only on the owning worker, then copied into independently owned CPU NV12 planes. HDR, high bit depth and interlaced input are explicitly rejected. Session recreation on seek clears references and pending pictures; generation-tagged frames remain valid after decoder close. Actual VideoToolbox hardware selection is queried instead of inferred from the request. Reconfigured dimensions update the existing ABI 2.1 output budget before a new CPU frame is copied.
