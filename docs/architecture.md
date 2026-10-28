@@ -12,7 +12,7 @@ remdia-cli / replayer -> remdia playback facade / public Engine::graph
         windows / macos: independent MF / VideoToolbox video decoder
         image: WIC / ImageIO / CoreGraphics image nodes
         native: gain, pixel conversion, packet copy, simple mux and sink
-        fallback_demux / fallback_vorbis / fallback_mp3_lame: narrow gaps
+        fallback_demux / macOS-only fallback_mp3_lame: narrow gaps
 ```
 
 A capability pack registers multiple independent factories. Components are created individually, and every graph node owns its own submit/receive/drain/reset state. Media samples cross DLLs as immutable byte views with explicit retain/release callbacks. Native code remains loaded for the process lifetime. A session is a convenience graph builder; it does not contain a second, fused implementation.
@@ -37,7 +37,7 @@ Seek records known random-access points and, for H.264/HEVC, searches preceding 
 
 System audio uses AudioConverter on macOS and synchronous MFTs on Windows, with independent PCM conversion and resampling nodes. Compressed packets remain distinct from decoded samples. The AVFoundation / MF Source Reader adapters output native compressed types and preserve decoder configuration; current system sources accept complete local files. HTTP/Range/progressive sources and container gaps use the separate Symphonia compatibility demux; that pack does not register audio decoders. Codec selection queries installed capabilities before graph creation. Unsupported profiles, corrupt input, cancellation and budget failures are never handled by arbitrary decoder retries.
 
-Opus decoding is system-provided on both supported platforms. Windows has a separate narrow Vorbis fallback when no usable system MFT exists. The Windows raw MP3 MFT encoder is separate from the 16 kHz gapless export contract, which still needs the independent LAME fallback; macOS does not expose a system MP3 encoder. No Rubato or libopus is bundled. See [third-party boundaries](../THIRD_PARTY.md).
+Opus and Vorbis decoding use installed system codecs on both platforms; unsupported profiles fail without a bundled decoder retry. Windows MP3 export composes the system encoder and an independent Xing/LAME-compatible gapless mux. Encoder delay is calibrated once per process through the installed system encoder/decoder; sample count and tail padding are stored in the file. LAME is built and packaged only on macOS, which does not expose a system MP3 encoder. No Rubato, libopus, software Vorbis or WebP decoder is bundled. See [third-party boundaries](../THIRD_PARTY.md).
 
 Images use the same GraphSpec, component ABI, immutable MediaBuffer and scheduler as audio/video. MediaRequest::Image builds that graph; graph_with_inputs binds encoded bytes or existing pixels through core.buffer.source. Images normalize to CPU RGBA8, straight alpha, sRGB with orientation applied. Decode/probe/scale/crop/alpha/orient/tile/compose/encode are independent nodes, using WIC or ImageIO/CoreGraphics. WebP decoding uses only the installed WIC / ImageIO codec; absence is reported as unsupported and no software WebP fallback is bundled. The facade enforces dimensions, pixel counts, buffer bounds and cancellation. JPEG encoding applies the caller's matte and quality policy. Managed memory remains distinct from opaque system allocations.
 

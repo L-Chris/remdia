@@ -25,8 +25,7 @@ HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/
 | `windows` / `macos` | 独立视频解码；Windows 同步软件 MFT，macOS VideoToolbox 硬解优先/软件模式 |
 | `image` | WIC 或 ImageIO/CoreGraphics 的 probe/decode/scale/crop/alpha/orient/tile/compose/encode 工厂 |
 | `fallback_demux` | Symphonia 仅用于系统容器缺口及现有 HTTP/Range/渐进 source 适配；不注册音频 decoder |
-| `fallback_vorbis` | 仅 Windows，未安装匹配同步 Vorbis MFT 时的窄解码器 |
-| `fallback_mp3_lame` | 16 kHz gapless MP3 请求缺口；macOS 无系统 MP3 encoder，Windows MFT 的原始 MP3 工厂与该请求契约分开判断 |
+| `fallback_mp3_lame` | 仅 macOS，默认系统没有 MP3 encoder；Windows 使用系统 MFT + 独立 gapless mux |
 
 已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。WebP 仅使用 WIC / ImageIO；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
 
@@ -61,7 +60,7 @@ Windows x64：Rust、Visual Studio C++ Build Tools、Python 3；TLS 依赖的部
 
 显式图示例保留兼容 demux，以演示跨能力包组合；默认 facade 优先系统 demux。文件 sink 不覆盖已有目标；WAV mux 在 drain 后修正 RIFF 头。MP3 packet copy/mux 不承诺保留原始 ID3/Xing；gapless 编码请求生成新的延迟/填充标签。Windows 的 `windows.mp3.encode` 是独立的系统原始 MP3 工厂，支持的输入档位以能力查询为准。
 
-Windows 已实测系统 MP3 encoder 的 16 kHz 编码可用；当前缺的是 SDK 系统路径的 gapless 首尾信息与封装适配。macOS 默认公开接口没有 MP3 encoder。[能力边界与实际回读数据](docs/system-mp3-encoding.md)区分这两个保留 LAME 的原因。
+Windows 的 16 kHz mono gapless 导出使用 MFT 编码和 `native.mp3.gapless_mux` 封装。首轮编码用系统 decoder 校准延迟，缓存成功结果；元数据标记有效样本数并排除首尾填充。macOS 默认公开接口没有 MP3 encoder，因此仅 macOS 保留 LAME。[能力边界与验证方法](docs/system-mp3-encoding.md)。
 
 ## Rust SDK
 

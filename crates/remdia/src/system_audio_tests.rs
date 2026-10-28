@@ -34,6 +34,103 @@ fn pcm(samples: usize, rate: u32, channels: u16, pts_us: i64, generation: u64) -
         ],
     )
 }
+
+#[test]
+#[ignore = "requires staged system audio/demux plugins"]
+fn windows_export_gapless_tags_interoperate_with_system_and_compat_demux() {
+    let engine = engine();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/windows-gapless");
+    for count in [1usize, 577, 32001] {
+        for demux in [
+            format!("{}.demux", std::env::consts::OS),
+            "fallback.demux".into(),
+        ] {
+            let file = root.join(format!("windows-gapless-{count}.mp3"));
+            let mut request = crate::Request::playback(file.to_str().unwrap());
+            request.task = crate::Task::Audio;
+            let config = NodeConfig {
+                component: demux.clone(),
+                settings: serde_json::to_value(&request).unwrap(),
+            };
+            let source = TrustedFactory(engine.registry())
+                .create(&config, Cancellation::default())
+                .unwrap();
+            let media = source.info().media.as_ref().unwrap();
+            assert_eq!(media.duration_us, Some(count as i64 * 1_000_000 / 16000));
+            let track = media.tracks.iter().find(|t| t.kind == "audio").unwrap();
+            let spec = GraphSpec {
+                nodes: vec![
+                    NodeSpec {
+                        id: "demux".into(),
+                        config,
+                    },
+                    NodeSpec {
+                        id: "decode".into(),
+                        config: NodeConfig {
+                            component: format!("{}.audio.decode", std::env::consts::OS),
+                            settings: json!({"track":track}),
+                        },
+                    },
+                ],
+                edges: vec![crate::EdgeSpec::between(
+                    "demux",
+                    "decode",
+                    Some(track.index as u32),
+                )],
+            };
+            let mut graph = unsafe { engine.graph(&spec, Cancellation::default()).unwrap() };
+            let mut pcm = Vec::new();
+            for attempts in 0..10000 {
+                assert!(attempts < 9999, "gapless graph stalled");
+                match graph.poll().unwrap() {
+                    GraphEvent::End => break,
+                    GraphEvent::Pending => {}
+                    GraphEvent::Output { buffer, .. } => {
+                        pcm.extend(
+                            buffer
+                                .bytes()
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|v| f32::from_le_bytes(*v)),
+                        );
+                    }
+                }
+            }
+            assert_eq!(pcm.len(), count, "{demux}: valid sample count");
+            if count == 32001 {
+                let mut state = 0x817a593bu32;
+                let mut filter = 0f32;
+                let input = (0..count)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 17;
+                        state ^= state << 5;
+                        filter = filter * 0.65
+                            + ((state as f64 / u32::MAX as f64 * 2. - 1.) as f32) * 0.35;
+                        filter * 0.6
+                    })
+                    .collect::<Vec<_>>();
+                let reference = &input[512..count - 512];
+                let candidate = &pcm[512..count - 512];
+                let dot = reference
+                    .iter()
+                    .zip(candidate)
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum::<f64>();
+                let a = reference.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                let b = candidate.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                let score = dot / (a * b).sqrt();
+                eprintln!(
+                    "WINDOWS_GAPLESS_INTEROP {} {demux}: samples={count}, correlation={score}",
+                    std::env::consts::OS
+                );
+                assert!(score > 0.85, "{demux}: incorrect sample alignment");
+            }
+        }
+    }
+}
 #[test]
 #[ignore = "requires staged system audio plugins"]
 fn system_src_counts_fractional_tail_and_preserves_reset_generations() {

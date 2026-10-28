@@ -15,18 +15,20 @@ Separately replaceable compatibility packs use:
   source/container profiles including the existing HTTP/Range adapter. ADTS,
   MPA and FLAC readers share upstream crates with decoder code, so those crates
   remain in Cargo.lock; no audio decoder is registered or created in this pack.
-  On Windows only, `fallback_vorbis` registers the narrow Vorbis decoder when
-  no compatible synchronous system Vorbis MFT is installed.
+  Vorbis software decoding is not included; unavailable system codecs are unsupported.
 - **mp3lame-encoder 0.2.5 / mp3lame-sys 0.1.11 (LGPL-3.0), LAME 3.100**,
   https://github.com/DoumanAsh/mp3lame-encoder and
   https://github.com/DoumanAsh/mp3lame-sys : `fallback_mp3_lame` supplies the
-  certified 16-kHz gapless encoding contract. AudioToolbox does not expose a
-  system MP3 encoder. Windows' independent MP3 MFT is also implemented, but its
-  advertised rate/profile and raw-frame output are distinct from that contract.
-  The separately replaceable fallback DLL/dylib statically incorporates the
-  wrapper and matching LAME sources. Retain their LGPL notices and source/relink
-  provisions when distributing. Rebuild this public revision with Cargo.lock;
+  certified 16-kHz gapless encoding contract on **macOS only**, where
+  AudioToolbox does not expose a system MP3 encoder. The macOS separately
+  replaceable fallback dylib statically incorporates the wrapper and matching
+  LAME sources. Retain their LGPL notices and source/relink provisions when
+  distributing macOS builds. Rebuild this public revision with Cargo.lock;
   replace the fallback component, rather than relinking the MIT host/core.
+  Windows uses Media Foundation encoding and remdia's independent gapless mux;
+  it does not build or distribute LAME. A LAME-compatible metadata tag is a file
+  format marker, not an encoder implementation; ID3 TENC identifies the actual
+  encoder as Windows Media Foundation / remdia.
 - **h264-reader 0.9 (MIT OR Apache-2.0)**,
   https://github.com/dholroyd/h264-reader , and **scuffle-h265 0.2.2
   (MIT OR Apache-2.0)**, https://github.com/scufflecloud/scuffle : macOS video
