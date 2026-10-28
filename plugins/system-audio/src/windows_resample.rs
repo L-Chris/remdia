@@ -8,18 +8,28 @@ use windows::Win32::{
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
 };
 
-unsafe fn pcm_type(rate: u32, channels: u16) -> Result<IMFMediaType> {
+unsafe fn pcm_type(rate: u32, channels: u16, bits: u32, float: bool) -> Result<IMFMediaType> {
     unsafe {
         let format = MFCreateMediaType()?;
         format.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-        format.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)?;
+        format.SetGUID(
+            &MF_MT_SUBTYPE,
+            if float {
+                &MFAudioFormat_Float
+            } else {
+                &MFAudioFormat_PCM
+            },
+        )?;
         format.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)?;
         format.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, u32::from(channels))?;
-        format.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 32)?;
-        format.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, u32::from(channels) * 4)?;
+        format.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, bits)?;
+        format.SetUINT32(
+            &MF_MT_AUDIO_BLOCK_ALIGNMENT,
+            u32::from(channels) * (bits / 8),
+        )?;
         format.SetUINT32(
             &MF_MT_AUDIO_AVG_BYTES_PER_SECOND,
-            rate * u32::from(channels) * 4,
+            rate * u32::from(channels) * (bits / 8),
         )?;
         let mask = match channels {
             1 => 4,
@@ -43,6 +53,7 @@ struct Segment {
     submitted: u64,
     emitted: u64,
     flushing: bool,
+    drain_sent: bool,
 }
 pub struct Resample {
     info: NodeInfo,
@@ -51,6 +62,9 @@ pub struct Resample {
     channels: u16,
     segment: Option<Segment>,
     draining: bool,
+    packet_track: Option<Track>,
+    source_bits: u32,
+    source_float: bool,
     _apartment: Apartment,
 }
 impl Resample {
@@ -79,15 +93,51 @@ impl Resample {
             channels,
             segment: None,
             draining: false,
+            packet_track: None,
+            source_bits: 32,
+            source_float: true,
             _apartment: apartment,
         })
+    }
+    pub fn pcm(config: &NodeConfig, control: Control) -> Result<Self> {
+        let track: Track = serde_json::from_value(config.settings["track"].clone())?;
+        ensure!(
+            (1..=6).contains(&track.channels) && (8000..=192000).contains(&track.sample_rate),
+            "invalid PCM track"
+        );
+        let (bits, float) = match track.codec.as_str() {
+            "pcm_u8" => (8, false),
+            "pcm_s16le" => (16, false),
+            "pcm_s24le" => (24, false),
+            "pcm_s32le" => (32, false),
+            "pcm_f32le" => (32, true),
+            other => anyhow::bail!("unsupported system PCM representation {other}"),
+        };
+        let mut filter = Self::new(
+            &NodeConfig {
+                component: config.component.clone(),
+                settings: serde_json::json!({"rate":track.sample_rate,"channels":track.channels.min(2)}),
+            },
+            control,
+        )?;
+        filter.channels = track.channels;
+        filter.info.output.channels = Some(track.channels);
+        filter.info.input = Some(PortCaps::new(DataKind::Packet));
+        filter.source_bits = bits;
+        filter.source_float = float;
+        filter.packet_track = Some(track);
+        Ok(filter)
     }
     fn start(&mut self, buffer: &MediaBuffer, rate: u32, channels: u16, pts: i64) -> Result<()> {
         unsafe {
             let transform: IMFTransform =
                 CoCreateInstance(&CResamplerMediaObject, None, CLSCTX_INPROC_SERVER)?;
-            transform.SetInputType(0, &pcm_type(rate, channels)?, 0)?;
-            transform.SetOutputType(0, &pcm_type(self.rate, self.channels)?, 0)?;
+            transform.SetInputType(
+                0,
+                &pcm_type(rate, channels, self.source_bits, self.source_float)?,
+                0,
+            )?;
+            transform.SetOutputType(0, &pcm_type(self.rate, self.channels, 32, true)?, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             self.segment = Some(Segment {
@@ -99,22 +149,13 @@ impl Resample {
                 submitted: 0,
                 emitted: 0,
                 flushing: false,
+                drain_sent: false,
             });
         }
         Ok(())
     }
     fn flush(segment: &mut Segment) -> Result<()> {
-        if !segment.flushing {
-            unsafe {
-                segment
-                    .transform
-                    .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
-                segment
-                    .transform
-                    .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
-            }
-            segment.flushing = true;
-        }
+        segment.flushing = true;
         Ok(())
     }
 }
@@ -126,15 +167,41 @@ impl Component for Resample {
         self.control.check()?;
         input.validate()?;
         ensure!(!self.draining, "input after resampler drain");
-        let FrameInfo::Audio {
-            pts_us,
-            rate,
-            channels,
-            samples,
-            ..
-        } = input.header.info
-        else {
-            anyhow::bail!("expected PCM")
+        let (pts_us, rate, channels, samples) = match (&input.header.info, &self.packet_track) {
+            (
+                FrameInfo::Audio {
+                    pts_us,
+                    rate,
+                    channels,
+                    samples,
+                    ..
+                },
+                None,
+            ) => (*pts_us, *rate, *channels, *samples),
+            (
+                FrameInfo::Packet {
+                    pts,
+                    time_base,
+                    trim_start: 0,
+                    trim_end: 0,
+                    ..
+                },
+                Some(track),
+            ) => {
+                ensure!(
+                    input.header.stream_id == track.index as u32,
+                    "invalid PCM stream"
+                );
+                let stride = track.channels as usize * self.source_bits as usize / 8;
+                ensure!(input.len().is_multiple_of(stride), "partial PCM frame");
+                (
+                    time_base.rescale(*pts, Rational::MICROS)?,
+                    track.sample_rate,
+                    track.channels,
+                    input.len() / stride,
+                )
+            }
+            _ => anyhow::bail!("expected canonical PCM or untrimmed PCM packet"),
         };
         ensure!(
             (8000..=192000).contains(&rate)
@@ -200,7 +267,53 @@ impl Component for Resample {
         let expected = (u128::from(segment.submitted) * u128::from(self.rate))
             .div_ceil(u128::from(segment.source_rate));
         let remaining = u64::try_from(expected)?.saturating_sub(segment.emitted);
+        if remaining == 0 && segment.flushing {
+            self.segment = None;
+            return Ok(if self.draining {
+                Receive::End
+            } else {
+                Receive::NeedInput
+            });
+        }
         unsafe {
+            if segment.flushing && !segment.drain_sent {
+                // Give the system FIR a bounded zero extension, then clip all
+                // output to the rational count of real admitted input frames.
+                let size = 128 * u32::from(segment.source_channels) * (self.source_bits / 8);
+                let buffer = MFCreateMemoryBuffer(size)?;
+                let mut pointer = std::ptr::null_mut();
+                buffer.Lock(&mut pointer, None, None)?;
+                std::ptr::write_bytes(
+                    pointer,
+                    if self.source_bits == 8 && !self.source_float {
+                        128
+                    } else {
+                        0
+                    },
+                    size as usize,
+                );
+                buffer.Unlock()?;
+                buffer.SetCurrentLength(size)?;
+                let sample = MFCreateSample()?;
+                sample.AddBuffer(&buffer)?;
+                sample.SetSampleTime(i64::try_from(
+                    u128::from(segment.submitted) * 10_000_000 / u128::from(segment.source_rate),
+                )?)?;
+                sample.SetSampleDuration(i64::from(128 * 10_000_000 / segment.source_rate))?;
+                match segment.transform.ProcessInput(0, &sample, 0) {
+                    Ok(()) => {
+                        segment
+                            .transform
+                            .ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0)?;
+                        segment
+                            .transform
+                            .ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+                        segment.drain_sent = true;
+                    }
+                    Err(error) if error.code() == MF_E_NOTACCEPTING => {}
+                    Err(error) => return Err(error).context("extend system SRC boundary"),
+                }
+            }
             let requirements = segment.transform.GetOutputStreamInfo(0)?;
             ensure!(
                 requirements.cbSize as usize <= self.info.max_output_bytes,

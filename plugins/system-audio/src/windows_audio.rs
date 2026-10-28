@@ -1,7 +1,7 @@
 //! Windows system audio decoder MFTs. Output is canonical interleaved float PCM.
 use anyhow::{Context, Result, ensure};
 use remdia_graph::*;
-use std::{mem::ManuallyDrop, sync::OnceLock};
+use std::{collections::VecDeque, mem::ManuallyDrop, sync::OnceLock};
 use windows::Win32::{
     Media::MediaFoundation::*,
     System::Com::{
@@ -34,6 +34,11 @@ pub(crate) fn startup() -> Result<()> {
         .map_err(anyhow::Error::msg)
 }
 
+struct Stamp {
+    header: BufferHeader,
+    frames: usize,
+    position: usize,
+}
 pub struct Decoder {
     transform: IMFTransform,
     track: Track,
@@ -46,6 +51,9 @@ pub struct Decoder {
     discontinuity: bool,
     output_bits: u32,
     output_float: bool,
+    stamps: VecDeque<Stamp>,
+    pending: VecDeque<MediaBuffer>,
+    first: bool,
     _apartment: Apartment,
 }
 impl Decoder {
@@ -110,7 +118,7 @@ impl Decoder {
                 info: NodeInfo {
                     input: Some(PortCaps::new(DataKind::Packet)),
                     output,
-                    max_output_bytes: 1024 * 1024,
+                    max_output_bytes: 16 * 1024 * 1024,
                     media: None,
                 },
                 rate: 0,
@@ -121,11 +129,90 @@ impl Decoder {
                 discontinuity: true,
                 output_bits: 0,
                 output_float: false,
+                stamps: VecDeque::new(),
+                pending: VecDeque::new(),
+                first: true,
                 _apartment: apartment,
             };
             decoder.refresh_format()?;
             Ok(decoder)
         }
+    }
+    fn mp3_output(&mut self, bytes: Vec<u8>) -> Result<Receive> {
+        let stride = self.channels as usize * 4;
+        let frames = bytes.len() / stride;
+        if self.first {
+            self.first = false;
+            let nominal = if self.rate < 32000 { 576 } else { 1152 };
+            let mut implicit = (nominal - frames % nominal) % nominal;
+            while implicit > 0 {
+                let stamp = self
+                    .stamps
+                    .front_mut()
+                    .context("missing MP3 priming stamp")?;
+                let n = implicit.min(stamp.frames - stamp.position);
+                stamp.position += n;
+                implicit -= n;
+                if stamp.position == stamp.frames {
+                    self.stamps.pop_front();
+                }
+            }
+        }
+        let mut offset = 0;
+        while offset < frames {
+            let Some(stamp) = self.stamps.front_mut() else {
+                ensure!(self.draining, "MP3 decoder returned unstamped samples");
+                break;
+            };
+            let FrameInfo::Packet {
+                pts,
+                time_base,
+                trim_start,
+                trim_end,
+                ..
+            } = stamp.header.info
+            else {
+                unreachable!()
+            };
+            let n = (frames - offset).min(stamp.frames - stamp.position);
+            let start = usize::try_from(trim_start)?
+                .saturating_sub(stamp.position)
+                .min(n);
+            let end = stamp
+                .frames
+                .saturating_sub(usize::try_from(trim_end)?)
+                .saturating_sub(stamp.position)
+                .min(n);
+            if start < end {
+                let mut header = stamp.header.clone();
+                header.info = FrameInfo::Audio {
+                    pts_us: time_base
+                        .rescale(pts, Rational::MICROS)?
+                        .checked_add(
+                            ((stamp.position + start) as i128 * 1_000_000 / i128::from(self.rate))
+                                as i64,
+                        )
+                        .context("MP3 timestamp overflow")?,
+                    rate: self.rate,
+                    channels: self.channels,
+                    samples: end - start,
+                    format: "f32le".into(),
+                };
+                self.pending.push_back(MediaBuffer::new(
+                    header,
+                    vec![bytes[(offset + start) * stride..(offset + end) * stride].to_vec()],
+                ));
+            }
+            stamp.position += n;
+            offset += n;
+            if stamp.position == stamp.frames {
+                self.stamps.pop_front();
+            }
+        }
+        Ok(self
+            .pending
+            .pop_front()
+            .map_or(Receive::NeedInput, Receive::Output))
     }
     fn refresh_format(&mut self) -> Result<()> {
         unsafe {
@@ -186,6 +273,13 @@ impl Component for Decoder {
         &self.info
     }
     fn submit(&mut self, input: &MediaBuffer) -> Result<Submit> {
+        if !self.pending.is_empty() {
+            return Ok(Submit::WouldBlock);
+        }
+        ensure!(
+            self.stamps.len() < 64,
+            "system decoder made no output progress"
+        );
         ensure!(
             !self.draining && input.header.stream_id == self.track.index as u32,
             "invalid AAC decoder input"
@@ -226,6 +320,17 @@ impl Component for Decoder {
             }
             match self.transform.ProcessInput(0, &sample, 0) {
                 Ok(()) => {
+                    if self.track.codec == "mp3" {
+                        self.stamps.push_back(Stamp {
+                            header: input.header.clone(),
+                            frames: if self.track.sample_rate < 32000 {
+                                576
+                            } else {
+                                1152
+                            },
+                            position: 0,
+                        });
+                    }
                     self.discontinuity = false;
                     self.generation = input.header.generation;
                     if self.next_pts.is_none() {
@@ -239,11 +344,15 @@ impl Component for Decoder {
         }
     }
     fn receive(&mut self) -> Result<Receive> {
+        if let Some(buffer) = self.pending.pop_front() {
+            return Ok(Receive::Output(buffer));
+        }
         unsafe {
             let requirements = self.transform.GetOutputStreamInfo(0)?;
             ensure!(
                 requirements.cbSize as usize <= self.info.max_output_bytes,
-                "AAC output exceeds budget"
+                "system audio output requirement {} exceeds budget",
+                requirements.cbSize
             );
             let sample = if requirements.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 != 0
             {
@@ -337,6 +446,13 @@ impl Component for Decoder {
                     .all(|v| f32::from_le_bytes(*v).is_finite()),
                 "non-finite AAC PCM"
             );
+            ensure!(
+                bytes.len() <= self.info.max_output_bytes,
+                "system PCM exceeds output budget"
+            );
+            if self.track.codec == "mp3" {
+                return self.mp3_output(bytes);
+            }
             let samples = bytes.len() / usize::from(self.channels) / 4;
             self.next_pts =
                 Some(timestamp + (samples as i128 * 1_000_000 / i128::from(self.rate)) as i64);
@@ -376,6 +492,9 @@ impl Component for Decoder {
         self.draining = false;
         self.discontinuity = true;
         self.next_pts = None;
+        self.stamps.clear();
+        self.pending.clear();
+        self.first = true;
         self.generation = generation;
         Ok(())
     }

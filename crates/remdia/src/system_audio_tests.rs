@@ -101,7 +101,9 @@ fn system_src_counts_fractional_tail_and_preserves_reset_generations() {
                 filter.drain().unwrap();
                 for attempts in 0..1000 {
                     assert!(attempts < 999, "resampler drain stalled");
-                    match filter.receive().unwrap() {
+                    match filter.receive().unwrap_or_else(|error| {
+                        panic!("SRC {source_rate} -> {target_rate}: {error:#}")
+                    }) {
                         Receive::Output(output) => {
                             if let FrameInfo::Audio {
                                 samples, pts_us, ..
@@ -370,4 +372,11 @@ fn windows_system_alac_lossless() {
 #[ignore = "requires staged Windows system audio plugins"]
 fn windows_system_aac() {
     windows_decode_fixture("av.mp4", 145408);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_wav_pcm() {
+    windows_decode_fixture("audio.wav", 132300);
 }

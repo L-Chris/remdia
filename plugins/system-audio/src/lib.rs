@@ -56,6 +56,12 @@ fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     }
     #[cfg(windows)]
     if config.component == "windows.audio.decode" {
+        if config.settings["track"]["codec"]
+            .as_str()
+            .is_some_and(|codec| codec.starts_with("pcm_"))
+        {
+            return Ok(Box::new(windows_resample::Resample::pcm(config, control)?));
+        }
         return Ok(Box::new(windows_audio::Decoder::new(config)?));
     }
     let _ = config;
