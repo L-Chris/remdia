@@ -24,7 +24,19 @@ pub struct Demux {
     keys: BTreeMap<u32, Vec<(i64, i64)>>,
     scanned: BTreeMap<u32, i64>,
 }
+fn nearby_keyframe(keys: &[(i64, i64)], target: i64) -> Option<i64> {
+    keys.iter()
+        .rev()
+        .find(|p| p.0 <= target && target.saturating_sub(p.0) <= 4_000_000)
+        .map(|p| p.1)
+}
 fn codec_name(id: AudioCodecId) -> String {
+    use symphonia::core::codecs::audio::well_known::{CODEC_ID_AC3, CODEC_ID_EAC3};
+    match id {
+        CODEC_ID_AC3 => return "ac3".into(),
+        CODEC_ID_EAC3 => return "eac3".into(),
+        _ => {}
+    }
     codec_registry()
         .get_audio_decoder(id)
         .map(|d| d.codec.info.short_name.to_owned())
@@ -214,11 +226,12 @@ impl Demux {
         // Symphonia's experimental video seek locates a timestamp, not a sync
         // sample. Find a preceding random-access point without decoding frames.
         if self.scanned.get(&id).is_some_and(|p| *p >= target)
-            && let Some((_, dts)) = self
+            && let Some(dts) = self
                 .keys
                 .get(&id)
-                .and_then(|v| v.iter().rev().find(|p| p.0 <= target))
-                .copied()
+                // A maximum scanned PTS does not imply continuous coverage:
+                // a previous random seek can leave a long unscanned gap.
+                .and_then(|v| nearby_keyframe(v, target))
         {
             return self.seek_at(id, dts.saturating_sub(1));
         }
@@ -343,7 +356,7 @@ impl Component for Demux {
                 packet.data.len() <= self.request.max_packet_bytes,
                 "packet exceeds byte budget"
             );
-            let track = self
+            let Some(track) = self
                 .info
                 .media
                 .as_ref()
@@ -351,7 +364,11 @@ impl Component for Demux {
                 .tracks
                 .iter()
                 .find(|t| t.index == packet.track_id as usize)
-                .context("packet has unknown track")?;
+            else {
+                // Subtitle/attachment streams are deliberately absent from the
+                // exposed audio/video graph, but may be interleaved after a seek.
+                continue;
+            };
             let keyframe = packet_keyframe(track, &packet.data);
             if self.keyframe_gate == Some(packet.track_id) {
                 if keyframe != Some(true) {
@@ -507,4 +524,16 @@ fn probe_for(request: &Request) -> &'static symphonia::core::formats::probe::Pro
         p.register_metadata::<symphonia::default::meta::Id3v2Reader<'_>>();
         p
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nearby_keyframe;
+    #[test]
+    fn sparse_seek_history_does_not_turn_a_backward_seek_into_full_prefix_decode() {
+        let keys = [(0, 0), (3_000_000_000, 2_999_999_000)];
+        assert_eq!(nearby_keyframe(&keys, 1_500_000_000), None);
+        assert_eq!(nearby_keyframe(&keys, 3_001_000_000), Some(2_999_999_000));
+        assert_eq!(nearby_keyframe(&keys, 500_000), Some(0));
+    }
 }

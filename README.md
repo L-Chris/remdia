@@ -21,7 +21,7 @@ file / HTTP → demux → audio decoder → gain → resample → WAV mux → fi
 | `windows` | Media Foundation 同步软件视频 decoder，输入压缩 packet，输出 CPU NV12 |
 | `macos` | VideoToolbox 同步完成视频 decoder，硬解 Auto / 软件模式，输出 CPU NV12 |
 
-音频支持由 Symphonia 和独立 libopus 提供：MP3、FLAC、WAV/PCM、AAC-LC、ALAC、Vorbis、Opus 等。Rust demux 支持 MP4/MOV、MKV/WebM、Ogg、WAV、FLAC、MP3、AIFF、CAF 的已识别流。Windows 视频首要验收路径是 MP4/MKV 的 H.264；HEVC/VP8/VP9 等取决于系统已安装的 MFT，不能仅凭扩展名承诺可播放。Symphonia 的视频参数支持仍使用其 experimental feature，版本固定在 Cargo.lock。
+常规音频由 Symphonia 和独立 libopus 提供：MP3、FLAC、WAV/PCM、AAC-LC、ALAC、Vorbis、Opus 等。AC-3、E-AC-3 与多声道 AAC 使用系统解码器：Windows 为 Media Foundation，macOS 为 AudioToolbox，支持路径取决于系统组件是否可用；不附带独立解码器兜底。Rust demux 支持 MP4/MOV、MKV/WebM、Ogg、WAV、FLAC、MP3、AIFF、CAF 的已识别流。Windows 视频首要验收路径是 MP4/MKV 的 H.264；HEVC/VP8/VP9 等取决于系统已安装的 MFT，不能仅凭扩展名承诺可播放。Symphonia 的视频参数支持仍使用其 experimental feature，版本固定在 Cargo.lock。
 
 macOS 支持 macOS 15+ 的 Apple Silicon 与 Intel，H.264 SDR MP4/MKV 已验证；HEVC SDR 取决于系统能力，Main10/HDR/隔行输入明确拒绝。VideoToolbox 使用同步完成模式并按参数集声明的上界重排 B 帧；硬解请求与实际硬解结果分别记录。CPU 平面可跨线程使用，Metal/IOSurface 零拷贝留待后续。
 

@@ -11,6 +11,8 @@ use symphonia::core::{
     packet::PacketRef,
     units::{Duration, Timestamp},
 };
+#[cfg(test)]
+mod tests;
 pub fn codec_registry() -> &'static CodecRegistry {
     static REGISTRY: OnceLock<CodecRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
@@ -19,6 +21,45 @@ pub fn codec_registry() -> &'static CodecRegistry {
         registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
         registry
     })
+}
+pub fn create(config: &NodeConfig) -> Result<Box<dyn Component>> {
+    use symphonia::core::codecs::audio::well_known::{CODEC_ID_AAC, CODEC_ID_AC3, CODEC_ID_EAC3};
+    let id = config.settings["track"]["initialization"]["codec_id"].as_str();
+    if id == Some(CODEC_ID_AC3.to_string().as_str())
+        || id == Some(CODEC_ID_EAC3.to_string().as_str())
+        || id == Some(CODEC_ID_AAC.to_string().as_str())
+            && config.settings["track"]["channels"].as_u64().unwrap_or(0) > 2
+    {
+        let codec = if id == Some(CODEC_ID_AC3.to_string().as_str()) {
+            "AC-3"
+        } else if id == Some(CODEC_ID_EAC3.to_string().as_str()) {
+            "E-AC-3"
+        } else {
+            "multichannel AAC"
+        };
+        #[cfg(windows)]
+        {
+            Ok(Box::new(
+                super::windows_audio::Decoder::new(config).with_context(|| {
+                    format!("Windows system {codec} decoder is unavailable or incompatible")
+                })?,
+            ))
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Ok(Box::new(
+                super::apple_audio::Decoder::new(config).with_context(|| {
+                    format!("macOS system {codec} decoder is unavailable or incompatible")
+                })?,
+            ))
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            anyhow::bail!("{codec} requires a supported system audio decoder");
+        }
+    } else {
+        Ok(Box::new(Decoder::new(config)?))
+    }
 }
 #[derive(Deserialize)]
 struct Wire {

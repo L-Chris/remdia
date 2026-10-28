@@ -1,9 +1,17 @@
 //! FFmpeg-free demux, audio codecs, filters, encoders and muxers.
+#[cfg(target_os = "macos")]
+mod apple_audio;
+#[cfg(any(target_os = "macos", test))]
+mod apple_config;
 mod audio;
+#[cfg(target_os = "macos")]
+mod audio_toolbox_sys;
 mod demux;
 mod filters;
 mod mux;
 mod source;
+#[cfg(windows)]
+mod windows_audio;
 use anyhow::{Result, bail};
 use remdia_graph::*;
 fn descriptors() -> Vec<ComponentDescriptor> {
@@ -76,7 +84,7 @@ fn descriptors() -> Vec<ComponentDescriptor> {
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     Ok(match config.component.as_str() {
         "native.demux" => Box::new(demux::Demux::open(config, control)?),
-        "native.audio.decode" => Box::new(audio::Decoder::new(config)?),
+        "native.audio.decode" => audio::create(config)?,
         "native.audio.resample" => Box::new(filters::Resample::new(config)?),
         "native.audio.gain" => Box::new(filters::Gain::new(config)?),
         "native.video.rgba" => Box::new(filters::Rgba::new(config)?),

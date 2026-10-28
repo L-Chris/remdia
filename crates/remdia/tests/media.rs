@@ -36,6 +36,57 @@ fn samples(s: &mut Session) -> usize {
     }
     count
 }
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+#[ignore = "requires staged platform components and synthetic fixtures"]
+fn system_surround_audio_containers_drain_and_seek_through_the_public_graph() {
+    let e = engine();
+    for name in ["aac-surround.mkv", "ac3-surround.mkv", "eac3-surround.mkv"] {
+        let mut request = Request::playback(fixture(name));
+        request.task = Task::Audio;
+        request.audio_rate = 16000;
+        request.audio_channels = 1;
+        let mut session = match unsafe { e.open(request, Cancellation::default()) } {
+            Ok(session) => session,
+            Err(error) if !name.starts_with("aac-") => {
+                assert!(format!("{error:#}").contains("system"));
+                eprintln!("Optional system Dolby decoder unavailable for {name}: {error:#}");
+                continue;
+            }
+            Err(error) => panic!("system AAC graph failed: {error:#}"),
+        };
+        let first = samples(&mut session);
+        assert!(first > 0, "no decoded samples for {name}");
+        session.seek(0).unwrap();
+        assert_eq!(
+            samples(&mut session),
+            first,
+            "sample count changed after reset for {name}"
+        );
+    }
+}
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+#[ignore = "requires staged platform packs and synthetic fixtures"]
+fn playback_ignores_interleaved_subtitle_packets_before_and_after_seek() {
+    let e = engine();
+    let mut session = open(&e, "av-subtitles.mkv", Task::Playback);
+    for target in [0, 1_000_000, 250_000] {
+        session.seek(target).unwrap();
+        let (mut audio, mut video) = (0, 0);
+        while let Some(frame) = session.read().unwrap() {
+            match frame.info() {
+                FrameInfo::Audio { .. } => audio += 1,
+                FrameInfo::Video { .. } => video += 1,
+                _ => {}
+            }
+        }
+        assert!(
+            audio > 0 && video > 0,
+            "missing media after subtitle packets at {target}"
+        );
+    }
+}
 #[test]
 #[ignore = "requires staged component packs and fixtures"]
 fn audio_ranges_gapless_mp3_and_frame_lifetimes() {
