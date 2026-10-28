@@ -25,6 +25,11 @@ import shutil
 shutil.rmtree('dist/remdia', ignore_errors=True)
 PY
 python3 scripts/stage.py --profile "$profile" --target "$target"
+# ARM's linker normally adds an ad-hoc signature; Intel's does not. Sign both
+# architectures explicitly before auditing and archiving the portable SDK.
+for binary in dist/remdia/remdia dist/remdia/plugins/*.dylib; do
+  codesign --force --sign - "$binary"
+done
 python3 scripts/audit-package.py dist/remdia
 python3 - "$arch" <<'PY'
 import hashlib, sys, zipfile
