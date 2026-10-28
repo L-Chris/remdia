@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-msvc]
+# Buffers are released by their owning DLL, so CRT heaps never cross ABI calls.
+rustflags = ["-C", "target-feature=+crt-static"]

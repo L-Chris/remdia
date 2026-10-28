@@ -38,7 +38,7 @@ Windows x64 需要 Rust stable、Visual Studio C++ Build Tools、CMake 和 Pytho
 ./dist/remdia/remdia.exe graph examples/audio-to-wav.json
 ```
 
-输出：`dist/remdia-windows-x86_64.zip`。`plugins/` 同时包含 `native`、`windows` DLL 及 manifest。CLI 通过自身目录寻找插件，也可用 `--plugins PATH` / `REMDIA_PLUGIN_DIR` 指定。时间参数为整数微秒。
+输出：`dist/remdia-windows-x86_64.zip`。Windows x64 配置静态链接 MSVC 运行库；CLI 和组件 DLL 无需另装 VC Redistributable。`plugins/` 同时包含 `native`、`windows` DLL 及 manifest。CLI 通过自身目录寻找插件，也可用 `--plugins PATH` / `REMDIA_PLUGIN_DIR` 指定。时间参数为整数微秒。
 
 `graph` 接受用户定义的 JSON 图，支持串接、逐轨分支、扇出、滤镜顺序调整、绕过 decoder 的压缩流路径。文件 sink 不覆盖已有目标；写到临时文件，mux 排空后发布。WAV mux 在结尾通过带 offset 的输出修正 RIFF 头。MP3 packet mux 输出 elementary stream，重新封装的流不承诺保留原始 ID3/Xing/gapless 信息；MP3 encoder 则写入新的 LAME 延迟/填充标签。
 

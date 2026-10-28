@@ -35,7 +35,8 @@ jobs:
             ~/.cargo/registry
             target
             .deps
-          key: windows-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1') }}
+          restore-keys: windows-
+          key: windows-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1', '.cargo/config.toml') }}
       - name: Dependencies
         shell: pwsh
         run: ./scripts/setup-windows.ps1
