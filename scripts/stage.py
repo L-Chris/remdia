@@ -10,10 +10,11 @@ from pathlib import Path
 p = argparse.ArgumentParser()
 p.add_argument('--profile', default='debug', choices=['debug', 'release'])
 p.add_argument('--target')
+p.add_argument('--build-directory', type=Path, help='Cargo target directory (defaults to checkout target/)')
 p.add_argument('--output', default='dist/remdia')
 a = p.parse_args()
 root = Path(__file__).resolve().parent.parent
-build = root / 'target'
+build = a.build_directory or root / 'target'
 if a.target:
     build /= a.target
 build /= a.profile

@@ -1,8 +1,8 @@
-# Component ABI v2.1
+# Component ABI v2.2
 
 Canonical definitions: `crates/remdia-plugin-abi/src/lib.rs` and `include/remdia.h`. V2 intentionally rejects the previous fused-session ABI.
 
-- Export `remdia_plugin_query_v2(Header host, PluginApi *out)`. Major mismatch, an older host minor, or insufficient function-table size is rejected before writing. Function-table layout is unchanged in 2.1; it adds an explicit format-change result. New hosts can load v2.0 packs; v2.1 packs require a v2.1 host. Future table extensions must respect host struct_size.
+- Export `remdia_plugin_query_v2(Header host, PluginApi *out)`. Major mismatch, an older host minor, or insufficient function-table size is rejected before writing. Function-table layout is unchanged in 2.2. Version 2.1 added an explicit format-change result; 2.2 adds image kinds and image BufferHeader metadata. A 2.2 host accepts older v2 packs, while 2.2 packs reject a 2.1 host. Older packs keep their explicit factory IDs; the new default runtime requires the 0.3 capability manifests. Future table extensions must respect host struct_size.
 - Factories: describe returns ComponentDescriptor JSON; create takes NodeConfig JSON and returns NodeInfo plus an opaque instance. Manifests provide lazy-discovery hints and must match the real DLL factory list.
 - Dataflow: submit borrows an Input, receive returns an Output, drain ends input, reset clears state under a generation/target, command provides bounded auxiliary requests such as artwork, close destroys the instance.
 - Status: 0=accepted/output, 1=EOF/no auxiliary result, 2=NEED_INPUT, 3=WOULD_BLOCK, 4=RECONFIGURED, -1=error, -2=contained panic, -3=read/seek interruption. WOULD_BLOCK consumes nothing. A synchronous component must expose a progress path; it cannot reject both receive and submit forever. No asynchronous GPU/PENDING capability is advertised.
