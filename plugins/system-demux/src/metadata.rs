@@ -5,6 +5,23 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::Path,
 };
+/// Source Reader can omit FLAC codec private data. Preserve the native container's
+/// STREAMINFO rather than depending on a particular Windows codec's blob layout.
+#[cfg(windows)]
+pub fn flac_streaminfo(path: &Path) -> Result<Option<Vec<u8>>> {
+    let mut file = std::fs::File::open(path)?;
+    let mut header = [0; 8];
+    if file.read(&mut header)? != header.len() || &header[..4] != b"fLaC" {
+        return Ok(None);
+    }
+    ensure!(
+        header[4] & 127 == 0 && header[5..] == [0, 0, 34],
+        "invalid FLAC STREAMINFO block"
+    );
+    let mut info = vec![0; 34];
+    file.read_exact(&mut info)?;
+    Ok(Some(info))
+}
 pub fn flac_artwork(path: &Path, limit: usize) -> Result<Option<Vec<u8>>> {
     let mut file = std::fs::File::open(path)?;
     let mut magic = [0; 4];

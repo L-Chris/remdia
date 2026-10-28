@@ -205,8 +205,9 @@ impl Decoder {
             }
             transform
                 .SetInputType(0, &input, 0)
-                .context("configure Windows audio input")?;
-            select_output(&transform, track.channels)?;
+                .context("configure Windows system audio input")?;
+            select_output(&transform, track.channels)
+                .context("negotiate Windows system audio output")?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             let mut output = PortCaps::new(DataKind::Audio);

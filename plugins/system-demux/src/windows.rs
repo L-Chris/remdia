@@ -231,6 +231,11 @@ impl Demux {
             };
             let mut mp3 = BTreeMap::new();
             for track in &mut tracks {
+                if track.codec == "flac"
+                    && let Some(extra) = super::metadata::flac_streaminfo(&file_path)?
+                {
+                    track.initialization["extra_data"] = serde_json::json!(extra);
+                }
                 if track.codec == "mp3"
                     && let Some(info) = remdia_bitstream::mp3::gapless(&file_path)?
                 {
