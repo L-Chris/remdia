@@ -280,3 +280,94 @@ fn system_decoders_match_the_certified_fixture_timeline() {
         assert_eq!(total, expected, "{name}");
     }
 }
+
+#[cfg(windows)]
+fn windows_decode_fixture(name: &str, expected: usize) {
+    let engine = engine();
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(name);
+    let mut request = crate::Request::playback(source.to_str().unwrap());
+    request.task = crate::Task::Probe;
+    let session = unsafe {
+        engine
+            .open(request.clone(), Cancellation::default())
+            .unwrap()
+    };
+    let track = session
+        .info()
+        .tracks
+        .iter()
+        .find(|t| t.kind == "audio")
+        .unwrap();
+    let spec = GraphSpec {
+        nodes: vec![
+            NodeSpec {
+                id: "demux".into(),
+                config: NodeConfig {
+                    component: "native.demux".into(),
+                    settings: serde_json::to_value(&request).unwrap(),
+                },
+            },
+            NodeSpec {
+                id: "decode".into(),
+                config: NodeConfig {
+                    component: "windows.audio.decode".into(),
+                    settings: json!({"track":track}),
+                },
+            },
+        ],
+        edges: vec![crate::EdgeSpec::between(
+            "demux",
+            "decode",
+            Some(track.index as u32),
+        )],
+    };
+    let mut graph = unsafe { engine.graph(&spec, Cancellation::default()).unwrap() };
+    let mut total = 0;
+    let mut first = None;
+    let mut last = None;
+    for attempts in 0..10000 {
+        assert!(attempts < 9999, "{name} stalled");
+        match graph.poll().unwrap() {
+            GraphEvent::End => break,
+            GraphEvent::Pending => {}
+            GraphEvent::Output { buffer, .. } => {
+                if let FrameInfo::Audio {
+                    samples, pts_us, ..
+                } = buffer.header.info
+                {
+                    total += samples;
+                    first.get_or_insert((samples, pts_us));
+                    last = Some((samples, pts_us));
+                }
+            }
+        }
+    }
+    eprintln!("{name}: total {total}, first {first:?}, last {last:?}");
+    assert_eq!(total, expected, "{name}");
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_mp3_gapless() {
+    windows_decode_fixture("audio.mp3", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_flac_lossless() {
+    windows_decode_fixture("cover.flac", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_alac_lossless() {
+    windows_decode_fixture("audio-alac.m4a", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_aac() {
+    windows_decode_fixture("av.mp4", 145408);
+}

@@ -1,4 +1,4 @@
-//! Windows system AAC and Dolby MFTs, behind the native audio ABI.
+//! Windows system audio decoder MFTs. Output is canonical interleaved float PCM.
 use anyhow::{Context, Result, ensure};
 use remdia_graph::*;
 use std::{mem::ManuallyDrop, sync::OnceLock};
@@ -44,6 +44,8 @@ pub struct Decoder {
     next_pts: Option<i64>,
     draining: bool,
     discontinuity: bool,
+    output_bits: u32,
+    output_float: bool,
     _apartment: Apartment,
 }
 impl Decoder {
@@ -57,16 +59,14 @@ impl Decoder {
         );
         let extra: Vec<u8> = serde_json::from_value(track.initialization["extra_data"].clone())?;
         let codec = track.codec.as_str();
-        ensure!(
-            matches!(codec, "aac" | "ac3" | "eac3"),
-            "unsupported Windows system audio configuration"
-        );
-        let (class, subtype, aac) = if codec == "ac3" {
-            (CMSDDPlusDecMFT, MFAudioFormat_Dolby_AC3, false)
-        } else if codec == "eac3" {
-            (CMSDDPlusDecMFT, MFAudioFormat_Dolby_DDPlus, false)
-        } else {
-            (CMSAACDecMFT, MFAudioFormat_AAC, true)
+        let (class, subtype, aac) = match codec {
+            "aac" => (CMSAACDecMFT, MFAudioFormat_AAC, true),
+            "ac3" => (CMSDDPlusDecMFT, MFAudioFormat_Dolby_AC3, false),
+            "eac3" => (CMSDDPlusDecMFT, MFAudioFormat_Dolby_DDPlus, false),
+            "mp3" => (CMP3DecMediaObject, MFAudioFormat_MP3, false),
+            "flac" => (CMSFLACDecMFT, MFAudioFormat_FLAC, false),
+            "alac" => (CMSALACDecMFT, MFAudioFormat_ALAC, false),
+            other => anyhow::bail!("unsupported Windows system audio codec {other}"),
         };
         ensure!(
             !aac || (2..=65536).contains(&extra.len()),
@@ -89,6 +89,12 @@ impl Decoder {
             user.extend_from_slice(&extra);
             if aac {
                 input.SetBlob(&MF_MT_USER_DATA, &user)?;
+            }
+            if matches!(codec, "flac" | "alac") {
+                input.SetBlob(&MF_MT_USER_DATA, &extra)?;
+                if let Some(bits) = track.initialization["bits_per_sample"].as_u64() {
+                    input.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, u32::try_from(bits)?)?;
+                }
             }
             transform
                 .SetInputType(0, &input, 0)
@@ -113,6 +119,8 @@ impl Decoder {
                 next_pts: None,
                 draining: false,
                 discontinuity: true,
+                output_bits: 0,
+                output_float: false,
                 _apartment: apartment,
             };
             decoder.refresh_format()?;
@@ -122,14 +130,17 @@ impl Decoder {
     fn refresh_format(&mut self) -> Result<()> {
         unsafe {
             let format = self.transform.GetOutputCurrentType(0)?;
+            self.output_float = format.GetGUID(&MF_MT_SUBTYPE)? == MFAudioFormat_Float;
+            self.output_bits = format.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)?;
             ensure!(
-                format.GetGUID(&MF_MT_SUBTYPE)? == MFAudioFormat_Float,
-                "AAC output must be float PCM"
+                self.output_float && self.output_bits == 32
+                    || !self.output_float && matches!(self.output_bits, 16 | 24 | 32),
+                "unsupported system PCM output"
             );
             self.rate = format.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)?;
             self.channels = u16::try_from(format.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)?)?;
             ensure!(
-                (8000..=48000).contains(&self.rate) && (1..=6).contains(&self.channels),
+                (8000..=192000).contains(&self.rate) && (1..=6).contains(&self.channels),
                 "invalid AAC output format"
             );
             self.info.output.rate = Some(self.rate);
@@ -140,21 +151,35 @@ impl Decoder {
 }
 unsafe fn select_output(transform: &IMFTransform, channels: u16) -> Result<()> {
     unsafe {
-        for index in 0..128 {
-            let format = match transform.GetOutputAvailableType(0, index) {
-                Ok(format) => format,
-                Err(e) if e.code() == MF_E_NO_MORE_TYPES => break,
-                Err(e) => return Err(e.into()),
-            };
-            if format.GetGUID(&MF_MT_SUBTYPE)? == MFAudioFormat_Float
-                && format.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? == u32::from(channels)
-            {
-                transform.SetOutputType(0, &format, 0)?;
-                return Ok(());
+        for float in [true, false] {
+            for index in 0..128 {
+                let format = match transform.GetOutputAvailableType(0, index) {
+                    Ok(format) => format,
+                    Err(error) if error.code() == MF_E_NO_MORE_TYPES => break,
+                    Err(error) => return Err(error.into()),
+                };
+                let subtype = format.GetGUID(&MF_MT_SUBTYPE)?;
+                let bits = format.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE)?;
+                if subtype
+                    == if float {
+                        MFAudioFormat_Float
+                    } else {
+                        MFAudioFormat_PCM
+                    }
+                    && (if float {
+                        bits == 32
+                    } else {
+                        matches!(bits, 16 | 24 | 32)
+                    })
+                    && format.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? == u32::from(channels)
+                {
+                    transform.SetOutputType(0, &format, 0)?;
+                    return Ok(());
+                }
             }
         }
     }
-    anyhow::bail!("Windows AAC cannot negotiate multichannel float PCM")
+    anyhow::bail!("Windows audio decoder cannot negotiate canonical PCM")
 }
 impl Component for Decoder {
     fn info(&self) -> &NodeInfo {
@@ -271,7 +296,9 @@ impl Component for Decoder {
             let len = buffer.GetCurrentLength()? as usize;
             ensure!(
                 len <= self.info.max_output_bytes
-                    && len.is_multiple_of(usize::from(self.channels) * 4),
+                    && len.is_multiple_of(
+                        usize::from(self.channels) * (self.output_bits as usize / 8)
+                    ),
                 "invalid AAC PCM length"
             );
             if len == 0 {
@@ -279,8 +306,29 @@ impl Component for Decoder {
             }
             let mut ptr = std::ptr::null_mut();
             buffer.Lock(&mut ptr, None, None)?;
-            let bytes = std::slice::from_raw_parts(ptr, len).to_vec();
+            let raw = std::slice::from_raw_parts(ptr, len).to_vec();
             buffer.Unlock()?;
+            let bytes = if self.output_float {
+                raw
+            } else {
+                // A scalar representation conversion after a system decoder;
+                // no codec, resampling or channel mixing is performed here.
+                raw.chunks_exact(self.output_bits as usize / 8)
+                    .flat_map(|value| {
+                        let sample = match self.output_bits {
+                            16 => f32::from(i16::from_le_bytes([value[0], value[1]])) / 32768.,
+                            24 => {
+                                (i32::from_le_bytes([0, value[0], value[1], value[2]]) as f32)
+                                    / 2147483648.
+                            }
+                            _ => {
+                                (i32::from_le_bytes(value.try_into().unwrap()) as f32) / 2147483648.
+                            }
+                        };
+                        sample.to_le_bytes()
+                    })
+                    .collect::<Vec<_>>()
+            };
             ensure!(
                 bytes
                     .as_chunks::<4>()
@@ -289,7 +337,7 @@ impl Component for Decoder {
                     .all(|v| f32::from_le_bytes(*v).is_finite()),
                 "non-finite AAC PCM"
             );
-            let samples = len / usize::from(self.channels) / 4;
+            let samples = bytes.len() / usize::from(self.channels) / 4;
             self.next_pts =
                 Some(timestamp + (samples as i128 * 1_000_000 / i128::from(self.rate)) as i64);
             Ok(Receive::Output(MediaBuffer::new(
