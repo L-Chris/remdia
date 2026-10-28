@@ -1,0 +1,5 @@
+/target/
+/.deps/
+/dist/
+*.tmp
+.DS_Store

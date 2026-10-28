@@ -1,0 +1,76 @@
+name: Windows
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+  windows:
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+            .deps
+          key: windows-${{ hashFiles('Cargo.lock', 'scripts/setup-windows.ps1') }}
+      - name: Dependencies
+        shell: pwsh
+        run: ./scripts/setup-windows.ps1
+      - name: Lint and unit tests
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and package
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Release
+      - name: Integration fixtures and native DLL tests
+        shell: pwsh
+        run: |
+          python scripts/fixtures.py --ffmpeg $env:REMDIA_TEST_FFMPEG
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:REMDIA_TEST_PLUGIN_DIR = "$PWD/dist/remdia/plugins"
+          $env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
+          cargo test --workspace --locked -- --include-ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/network-smoke.py --exe dist/remdia/remdia.exe --fixtures target/fixtures
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Relocated package smoke test
+        shell: pwsh
+        run: |
+          $stage = Join-Path $env:RUNNER_TEMP 'remdia-smoke'
+          Expand-Archive dist/remdia-windows-x86_64.zip $stage
+          $media = (Resolve-Path target/fixtures/av.mkv).Path
+          $env:PATH = "$env:SystemRoot/System32;$env:SystemRoot"
+          & "$stage/remdia.exe" decode $media --software --frames 1000
+          if ($LASTEXITCODE -ne 0) { throw 'Relocated package decode failed' }
+          & "$stage/remdia.exe" extract $media "$stage/audio.mp3" --duration-us 1000000
+          if ($LASTEXITCODE -ne 0) { throw 'Relocated package MP3 failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remdia-windows-x86_64
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
