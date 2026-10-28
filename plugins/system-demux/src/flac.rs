@@ -1,58 +1,85 @@
-//! Compensate for system container handlers' unframed/native-FLAC seek gaps.
-//! Only compressed framing is owned here; PCM still comes from system decoders.
-use anyhow::{Result, ensure};
+//! Compressed native-FLAC framing for the ordinary system decoder graph.
+use anyhow::Result;
 use remdia_graph::*;
+use serde_json::json;
 
-pub struct Source {
+pub struct Demux {
     reader: remdia_bitstream::flac::Reader,
-    stream: u32,
+    info: NodeInfo,
+    source: std::path::PathBuf,
+    control: Control,
+    generation: u64,
+    ended: bool,
 }
-impl Source {
-    pub fn open(
-        path: &std::path::Path,
-        media: &mut MediaInfo,
-        limit: usize,
-        control: Control,
-    ) -> Result<Option<Self>> {
-        if media.container != "flac" {
-            return Ok(None);
-        }
-        ensure!(
-            media.tracks.len() == 1 && media.tracks[0].codec == "flac",
-            "unexpected native FLAC tracks"
-        );
-        let reader = remdia_bitstream::flac::Reader::open(path, limit, &|| control.check())?;
-        let track = &mut media.tracks[0];
-        ensure!(
-            track.sample_rate == reader.rate && track.channels == reader.channels,
-            "system FLAC format disagrees with STREAMINFO"
-        );
-        track.time_base = Rational {
-            num: 1,
-            den: reader.rate as i32,
+impl Demux {
+    pub fn open(request: &Request, control: Control) -> Result<Self> {
+        let source = std::path::Path::new(&request.source).canonicalize()?;
+        let reader =
+            remdia_bitstream::flac::Reader::open(&source, request.max_packet_bytes, &|| {
+                control.check()
+            })?;
+        let track = Track {
+            index: 0,
+            kind: "audio".into(),
+            codec: "flac".into(),
+            time_base: Rational {
+                num: 1,
+                den: reader.rate as i32,
+            },
+            width: 0,
+            height: 0,
+            sample_rate: reader.rate,
+            channels: reader.channels,
+            attached_picture: false,
+            metadata: Default::default(),
+            initialization: json!({"extra_data":reader.streaminfo.as_slice(),"bits_per_sample":reader.bits,"container":"flac"}),
         };
-        // Use the portable STREAMINFO contract on both platforms. Each system
-        // decoder adapter constructs its own native initialization envelope.
-        track.initialization["extra_data"] = serde_json::json!(reader.streaminfo.as_slice());
-        track.initialization["system_cookie"] = false.into();
-        track.initialization["bits_per_sample"] = reader.bits.into();
-        if reader.samples > 0 {
-            media.duration_us =
-                Some((u128::from(reader.samples) * 1_000_000 / u128::from(reader.rate)) as i64);
-        }
-        Ok(Some(Self {
+        let media = MediaInfo {
+            container: "flac".into(),
+            origin_us: 0,
+            duration_us: (reader.samples > 0)
+                .then(|| (u128::from(reader.samples) * 1_000_000 / u128::from(reader.rate)) as i64),
+            metadata: reader.metadata.clone(),
+            tracks: vec![track],
+        };
+        Ok(Self {
             reader,
-            stream: track.index as u32,
-        }))
+            source,
+            control,
+            generation: 1,
+            ended: false,
+            info: NodeInfo {
+                input: None,
+                output: PortCaps::new(DataKind::Packet),
+                max_output_bytes: request.max_packet_bytes,
+                media: Some(media),
+            },
+        })
     }
-    pub fn receive(&mut self, generation: u64, control: Control) -> Result<Receive> {
-        let Some(packet) = self.reader.next(&|| control.check())? else {
+    fn stats(&self) -> MediaBuffer {
+        MediaBuffer::new(BufferHeader { stream_id: 0, generation: self.generation,
+            info: FrameInfo::Blob { format: "application/json".into() } },
+            vec![serde_json::to_vec(&json!({"bytes_read":self.reader.bytes_read(), "frames_read":self.reader.frames_read,
+                "index_entries":self.reader.index_entries()})).unwrap()])
+    }
+}
+impl Component for Demux {
+    fn info(&self) -> &NodeInfo {
+        &self.info
+    }
+    fn receive(&mut self) -> Result<Receive> {
+        self.control.check()?;
+        if self.ended {
+            return Ok(Receive::End);
+        }
+        let Some(packet) = self.reader.next(&|| self.control.check())? else {
+            self.ended = true;
             return Ok(Receive::End);
         };
         Ok(Receive::Output(MediaBuffer::new(
             BufferHeader {
-                stream_id: self.stream,
-                generation,
+                stream_id: 0,
+                generation: self.generation,
                 info: FrameInfo::Packet {
                     pts: packet.sample as i64,
                     dts: packet.sample as i64,
@@ -69,28 +96,39 @@ impl Source {
             vec![packet.bytes],
         )))
     }
-    pub fn seek(&mut self, target: i64, control: Control) -> Result<()> {
-        let target =
-            (u128::try_from(target.max(0))? * u128::from(self.reader.rate) / 1_000_000) as u64;
-        self.reader.seek(target, &|| control.check())
+    fn drain(&mut self) -> Result<()> {
+        self.ended = true;
+        Ok(())
     }
-    pub fn stats(&self, generation: u64) -> MediaBuffer {
-        MediaBuffer::new(
-            BufferHeader {
-                stream_id: self.stream,
-                generation,
-                info: FrameInfo::Bytes {
-                    format: "json".into(),
-                    offset: None,
-                },
-            },
-            vec![
-                serde_json::to_vec(&serde_json::json!({
-                    "bytes_read":self.reader.bytes_read(), "frames_read":self.reader.frames_read,
-                    "index_entries":self.reader.index_entries()
-                }))
-                .unwrap(),
-            ],
+    fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
+        let sample =
+            (u128::try_from(target.max(0))? * u128::from(self.reader.rate) / 1_000_000) as u64;
+        self.reader.seek(sample, &|| self.control.check())?;
+        self.generation = generation;
+        self.ended = false;
+        Ok(())
+    }
+    fn command(&mut self, command: &serde_json::Value) -> Result<Option<MediaBuffer>> {
+        self.control.check()?;
+        if command["op"] == "flac.stats" {
+            return Ok(Some(self.stats()));
+        }
+        if command["op"] != "artwork" {
+            return Ok(None);
+        }
+        Ok(
+            super::metadata::flac_artwork(&self.source, 8 * 1024 * 1024)?.map(|bytes| {
+                MediaBuffer::new(
+                    BufferHeader {
+                        stream_id: 0,
+                        generation: self.generation,
+                        info: FrameInfo::Artwork {
+                            codec: "system-image".into(),
+                        },
+                    },
+                    vec![bytes],
+                )
+            }),
         )
     }
 }

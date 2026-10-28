@@ -33,6 +33,7 @@ struct Header {
     sample: u64,
     frames: u32,
     length: usize,
+    variable: bool,
 }
 pub struct Packet {
     pub sample: u64,
@@ -46,12 +47,14 @@ pub struct Reader {
     pub channels: u16,
     pub bits: u8,
     pub samples: u64,
+    pub metadata: BTreeMap<String, String>,
     max_block: u32,
     length: u64,
     position: u64,
     limit: usize,
     index: BTreeMap<u64, u64>,
     expected: Option<u64>,
+    variable: Option<bool>,
     pub frames_read: u64,
 }
 impl Reader {
@@ -80,11 +83,16 @@ impl Reader {
         let min_block = u16::from_be_bytes(streaminfo[..2].try_into()?) as u32;
         let max_block = u16::from_be_bytes(streaminfo[2..4].try_into()?) as u32;
         ensure!(
-            rate > 0 && (4..=32).contains(&bits) && min_block >= 16 && max_block >= min_block,
+            (1..=655350).contains(&rate)
+                && (4..=32).contains(&bits)
+                && min_block >= 16
+                && max_block >= min_block,
             "invalid FLAC stream format"
         );
         let mut index = BTreeMap::new();
         let mut last = magic[4] & 128 != 0;
+        let mut seen_table = false;
+        let mut metadata = BTreeMap::new();
         for n in 0..4096 {
             if last {
                 break;
@@ -94,6 +102,10 @@ impl Reader {
             let mut header = [0; 4];
             file.read_exact(&mut header)?;
             last = header[0] & 128 != 0;
+            ensure!(
+                !matches!(header[0] & 127, 0 | 127),
+                "invalid FLAC metadata block type"
+            );
             let size = u32::from_be_bytes([0, header[1], header[2], header[3]]) as u64;
             let end = file
                 .stream_position()?
@@ -104,6 +116,8 @@ impl Reader {
                 "FLAC metadata exceeds bound"
             );
             if header[0] & 127 == 3 {
+                ensure!(!seen_table, "duplicate FLAC SEEKTABLE");
+                seen_table = true;
                 ensure!(size.is_multiple_of(18), "invalid FLAC SEEKTABLE size");
                 let count = size / 18;
                 let stride = count.div_ceil(INDEX_LIMIT as u64).max(1);
@@ -119,6 +133,7 @@ impl Reader {
                         continue;
                     }
                     let offset = u64::from_be_bytes(entry[8..16].try_into()?);
+                    ensure!(sample != 0 || offset == 0, "invalid FLAC first seek point");
                     ensure!(
                         previous.is_none_or(|(s, o)| sample > s && offset > o),
                         "unordered FLAC SEEKTABLE"
@@ -132,6 +147,56 @@ impl Reader {
                         index.insert(sample, offset);
                     }
                 }
+            } else if header[0] & 127 == 4 {
+                fn integer(file: &mut impl Read) -> Result<u32> {
+                    let mut bytes = [0; 4];
+                    file.read_exact(&mut bytes)?;
+                    Ok(u32::from_le_bytes(bytes))
+                }
+                let vendor = u64::from(integer(&mut file)?);
+                ensure!(
+                    file.stream_position()?.saturating_add(vendor + 4) <= end,
+                    "truncated FLAC comments"
+                );
+                file.seek_relative(vendor as i64)?;
+                let count = integer(&mut file)?;
+                ensure!(count <= 65536, "too many FLAC comments");
+                for n in 0..count {
+                    if n.is_multiple_of(256) {
+                        check()?;
+                    }
+                    ensure!(
+                        file.stream_position()?.saturating_add(4) <= end,
+                        "truncated FLAC comment"
+                    );
+                    let size = u64::from(integer(&mut file)?);
+                    ensure!(
+                        file.stream_position()?.saturating_add(size) <= end,
+                        "truncated FLAC comment value"
+                    );
+                    if size <= 8192 {
+                        let mut text = vec![0; size as usize];
+                        file.read_exact(&mut text)?;
+                        if let Ok(text) = std::str::from_utf8(&text)
+                            && let Some((key, value)) = text.split_once('=')
+                            && !value.is_empty()
+                            && let Some(key) = match key.to_ascii_lowercase().as_str() {
+                                "title" => Some("title"),
+                                "artist" => Some("artist"),
+                                "album" => Some("album"),
+                                _ => None,
+                            }
+                        {
+                            metadata.entry(key.into()).or_insert_with(|| value.into());
+                        }
+                    } else {
+                        file.seek_relative(size as i64)?;
+                    }
+                }
+                ensure!(
+                    file.stream_position()? == end,
+                    "invalid FLAC comment length"
+                );
             } else {
                 file.seek(SeekFrom::Start(end))?;
             }
@@ -145,21 +210,32 @@ impl Reader {
             ensure!(*offset < length, "FLAC seek point outside file");
         }
         index.insert(0, first);
-        Ok(Self {
+        let mut reader = Self {
             file,
             streaminfo,
             rate,
             channels,
             bits,
             samples,
+            metadata,
             max_block,
             length,
             position: first,
             limit,
             index,
             expected: Some(0),
+            variable: None,
             frames_read: 0,
-        })
+        };
+        let first_header = reader
+            .header()?
+            .context("invalid first FLAC frame header")?;
+        ensure!(
+            first_header.sample == 0,
+            "FLAC does not start at sample zero"
+        );
+        reader.variable = Some(first_header.variable);
+        Ok(reader)
     }
     pub fn bytes_read(&self) -> u64 {
         self.file.get_ref().bytes
@@ -168,7 +244,13 @@ impl Reader {
         self.index.len()
     }
     fn position(&mut self, position: u64) -> Result<()> {
-        self.file.seek(SeekFrom::Start(position))?;
+        // Keep nearby header probes inside the existing buffer. Invalidating
+        // it at every 0xff in a compressed payload causes large read amplification.
+        if let Ok(delta) = i64::try_from(i128::from(position) - i128::from(self.position)) {
+            self.file.seek_relative(delta)?;
+        } else {
+            self.file.seek(SeekFrom::Start(position))?;
+        }
         self.position = position;
         Ok(())
     }
@@ -422,6 +504,9 @@ fn parse_header(data: &[u8], stream: &Reader) -> Option<Header> {
         return None;
     }
     let variable = data[1] & 1 != 0;
+    if stream.variable.is_some_and(|expected| expected != variable) {
+        return None;
+    }
     if number >= (1u64 << if variable { 36 } else { 31 }) {
         return None;
     }
@@ -434,6 +519,7 @@ fn parse_header(data: &[u8], stream: &Reader) -> Option<Header> {
         sample,
         frames,
         length: i + 1,
+        variable,
     })
 }
 fn crc8(bytes: &[u8]) -> u8 {
@@ -481,6 +567,9 @@ mod tests {
         ] {
             let mut reader = Reader::open(&fixture(name), 16 * 1024 * 1024, &|| Ok(()))?;
             assert_eq!(reader.samples, total);
+            if name == "audio-tail.flac" {
+                assert_eq!(reader.metadata["title"], "QQ adapter test");
+            }
             for target in [total - 10, 0, total / 2, total - 1, 0] {
                 reader.seek(target, &|| Ok(()))?;
                 let first = reader.next(&|| Ok(()))?.unwrap();
@@ -558,6 +647,16 @@ mod tests {
         );
         let mut reader = Reader::open(&fixture("audio-tail.flac"), 16 * 1024 * 1024, &|| Ok(()))?;
         assert!(reader.seek(100000, &|| anyhow::bail!("cancelled")).is_err());
+        let polls = std::cell::Cell::new(0);
+        assert!(
+            reader
+                .seek(100000, &|| {
+                    polls.set(polls.get() + 1);
+                    ensure!(polls.get() < 10, "cancelled during frame scan");
+                    Ok(())
+                })
+                .is_err()
+        );
         reader.seek(100000, &|| Ok(()))?;
         assert_eq!(reader.next(&|| Ok(()))?.unwrap().sample, 99328);
         Ok(())

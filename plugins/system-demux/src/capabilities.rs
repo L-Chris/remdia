@@ -53,7 +53,7 @@ pub fn query(config: &NodeConfig) -> Result<serde_json::Value> {
     let kind = container(source)?;
     let available = supported.contains(&kind);
     Ok(
-        json!({"supported":available,"container":kind,"reason":if available {"system container reader available"} else {"system container type unavailable"}}),
+        json!({"supported":available,"container":kind,"reason":if available && kind == "flac" {"native FLAC framing adapter with system decoder"} else if available {"system container reader available"} else {"system container type unavailable"}}),
     )
 }
 pub struct Capabilities {

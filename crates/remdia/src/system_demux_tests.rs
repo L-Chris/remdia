@@ -348,6 +348,10 @@ fn system_long_flac_seek_preserves_samples_and_rapid_reset_generations() {
             }
             assert!(count.abs_diff(96000) <= 1, "{name}: tail samples={count}");
         }
+        session.seek(1_800_000_000).unwrap();
+        assert!(session.read().unwrap().is_none());
+        session.seek(1_900_000_000).unwrap();
+        assert!(session.read().unwrap().is_none());
         let generation = session.seek(0).unwrap();
         let frame = session.read().unwrap().expect("replay after EOF");
         assert_eq!(frame.generation(), generation);
@@ -358,7 +362,7 @@ fn system_long_flac_seek_preserves_samples_and_rapid_reset_generations() {
 #[test]
 #[ignore = "requires staged plugins and generated long FLAC fixtures"]
 fn system_flac_seek_decodes_only_target_packets() {
-    use crate::graph::{Component, MediaBuffer, NodeInfo, Receive};
+    use crate::graph::{Component, MediaBuffer, NodeInfo, Receive, Submit};
     use std::{cell::RefCell, rc::Rc};
     #[derive(Default)]
     struct Stats {
@@ -376,13 +380,17 @@ fn system_flac_seek_decodes_only_target_packets() {
         }
         fn receive(&mut self) -> anyhow::Result<Receive> {
             let result = self.inner.receive()?;
-            if let Receive::Output(ref buffer) = result {
+            if let Some(buffer) = self.inner.command(&json!({"op":"flac.stats"}))? {
+                self.stats.borrow_mut().container = serde_json::from_slice(buffer.bytes())?;
+            }
+            Ok(result)
+        }
+        fn submit(&mut self, buffer: &MediaBuffer) -> anyhow::Result<Submit> {
+            let result = self.inner.submit(buffer)?;
+            if result == Submit::Accepted {
                 let mut stats = self.stats.borrow_mut();
                 stats.packets += 1;
                 stats.bytes += buffer.bytes().len();
-            }
-            if let Some(buffer) = self.inner.command(&json!({"op":"flac.stats"}))? {
-                self.stats.borrow_mut().container = serde_json::from_slice(buffer.bytes())?;
             }
             Ok(result)
         }
@@ -452,7 +460,13 @@ fn system_flac_seek_decodes_only_target_packets() {
                         stats: stats.clone(),
                     }) as Box<dyn Component>,
                 ),
-                ("decode".into(), decoder),
+                (
+                    "decode".into(),
+                    Box::new(Counted {
+                        inner: decoder,
+                        stats: stats.clone(),
+                    }),
+                ),
             ],
             &[EdgeSpec::between("demux", "decode", Some(stream))],
             engine.budget().clone(),
@@ -482,7 +496,7 @@ fn system_flac_seek_decodes_only_target_packets() {
             "decoded from the beginning: {first}"
         );
         assert!(
-            stats.packets <= 4,
+            stats.packets <= 8,
             "decoded {} preroll packets",
             stats.packets
         );

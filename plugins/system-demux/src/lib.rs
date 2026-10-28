@@ -33,6 +33,17 @@ fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     if config.component == format!("{}.demux.capabilities", std::env::consts::OS) {
         return Ok(Box::new(capabilities::Capabilities::new(config)?));
     }
+    #[cfg(any(windows, target_os = "macos"))]
+    if config.component == format!("{}.demux", std::env::consts::OS) {
+        let request: Request = serde_json::from_value(config.settings.clone())?;
+        request.validate()?;
+        control.check()?;
+        // Choose by container up front, not by catching runtime I/O or codec
+        // failures. System native-FLAC compressed sources lack this contract.
+        if !request.source.contains("://") && capabilities::container(&request.source)? == "flac" {
+            return Ok(Box::new(flac::Demux::open(&request, control)?));
+        }
+    }
     #[cfg(target_os = "macos")]
     if config.component == "macos.demux" {
         return Ok(Box::new(apple::Demux::open(config, control)?));

@@ -74,7 +74,6 @@ pub struct Demux {
     generation: u64,
     ended: bool,
     source: std::path::PathBuf,
-    flac: Option<super::flac::Source>,
 }
 impl Drop for Demux {
     fn drop(&mut self) {
@@ -130,19 +129,12 @@ impl Demux {
             generation: 1,
             ended: false,
             source,
-            flac: None,
         };
         let bytes = unsafe { CStr::from_ptr(metadata) }.to_bytes();
         let media = serde_json::from_slice(bytes);
         unsafe { rm_demux_free(metadata.cast()) };
         let mut media: MediaInfo = media?;
         media.container = super::capabilities::container(&request.source)?.into();
-        demux.flac = super::flac::Source::open(
-            &demux.source,
-            &mut media,
-            request.max_packet_bytes,
-            control,
-        )?;
         demux.info.media = Some(media);
         control.check()?;
         Ok(demux)
@@ -156,9 +148,6 @@ impl Component for Demux {
         self.control.check()?;
         if self.ended {
             return Ok(Receive::End);
-        }
-        if let Some(flac) = &mut self.flac {
-            return flac.receive(self.generation, self.control);
         }
         let mut packet = Packet::default();
         if status(unsafe { rm_demux_read(self.reader, self.info.max_output_bytes, &mut packet) })?
@@ -205,20 +194,13 @@ impl Component for Demux {
     }
     fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
         self.control.check()?;
-        if let Some(flac) = &mut self.flac {
-            flac.seek(target, self.control)?;
-        } else {
-            status(unsafe { rm_demux_seek(self.reader, target) })?;
-        }
+        status(unsafe { rm_demux_seek(self.reader, target) })?;
         self.generation = generation;
         self.ended = false;
         Ok(())
     }
     fn command(&mut self, command: &serde_json::Value) -> Result<Option<MediaBuffer>> {
         self.control.check()?;
-        if command["op"] == "flac.stats" {
-            return Ok(self.flac.as_ref().map(|flac| flac.stats(self.generation)));
-        }
         if command["op"] != "artwork" {
             return Ok(None);
         }

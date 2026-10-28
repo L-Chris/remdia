@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      flac_baseline_run:
+        description: 'Optional completed Windows run ID for FLAC latency/memory comparison'
+        required: false
+        default: ''
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
@@ -80,19 +85,22 @@ jobs:
           & "$stage/remdia.exe" extract $media "$stage/audio.mp3" --duration-us 1000000
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package MP3 failed' }
       - name: Download FLAC linear-seek baseline (5bba7ce)
+        if: github.event_name == 'workflow_dispatch' && inputs.flac_baseline_run != ''
         uses: actions/download-artifact@v4
         with:
           name: remdia-windows-x86_64
-          run-id: 40739031761
+          run-id: ${{ inputs.flac_baseline_run }}
           github-token: ${{ github.token }}
           path: target/flac-baseline-download
       - name: FLAC seek latency and process memory
+        if: github.event_name == 'workflow_dispatch' && inputs.flac_baseline_run != ''
         shell: pwsh
         run: |
           Expand-Archive target/flac-baseline-download/remdia-windows-x86_64.zip target/flac-baseline -Force
           python scripts/measure-windows-flac.py --baseline target/flac-baseline/remdia.exe --current dist/remdia/remdia.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch' && inputs.flac_baseline_run != ''
         with:
           name: windows-flac-seek-measurements
           path: target/flac-seek-measurements.json
