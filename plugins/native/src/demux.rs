@@ -56,7 +56,7 @@ impl Demux {
         {
             hint.with_extension(ext);
         }
-        let mut format = symphonia::default::get_probe()
+        let mut format = probe_for(&request)
             .probe(
                 &hint,
                 mss,
@@ -173,7 +173,7 @@ impl Demux {
 impl Demux {
     fn reopen(&mut self) -> Result<()> {
         let source = super::source::open(&self.request, self.control)?;
-        self.format = symphonia::default::get_probe().probe(
+        self.format = probe_for(&self.request).probe(
             &Hint::new(),
             MediaSourceStream::new(source, Default::default()),
             FormatOptions::default(),
@@ -468,4 +468,30 @@ impl Component for Demux {
         }
         Ok(None)
     }
+}
+
+// A cache-backed HTTP stream must not wait for optional tags at the file tail.
+// Keep container length/Range support intact; only trailing metadata factories
+// are omitted during remote probing. Local files retain the full metadata set.
+fn probe_for(request: &Request) -> &'static symphonia::core::formats::probe::Probe {
+    if !request.source.starts_with("http://") && !request.source.starts_with("https://") {
+        return symphonia::default::get_probe();
+    }
+    static REMOTE: std::sync::OnceLock<symphonia::core::formats::probe::Probe> =
+        std::sync::OnceLock::new();
+    REMOTE.get_or_init(|| {
+        use symphonia::default::formats::*;
+        let mut p = symphonia::core::formats::probe::Probe::new();
+        p.register_format::<AdtsReader<'_>>();
+        p.register_format::<CafReader<'_>>();
+        p.register_format::<FlacReader<'_>>();
+        p.register_format::<IsoMp4Reader<'_>>();
+        p.register_format::<MpaReader<'_>>();
+        p.register_format::<AiffReader<'_>>();
+        p.register_format::<WavReader<'_>>();
+        p.register_format::<OggReader<'_>>();
+        p.register_format::<MkvReader<'_>>();
+        p.register_metadata::<symphonia::default::meta::Id3v2Reader<'_>>();
+        p
+    })
 }
