@@ -11,13 +11,15 @@ struct Args {
     budget_mib: usize,
     #[arg(long, global = true, default_value_t = 30_000)]
     timeout_ms: u64,
+    #[arg(long, global = true)]
+    system_only: bool,
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
     Plugins,
-    /// Enumerate actual installed system image read/write capabilities.
+    /// Enumerate installed system image, audio and container capabilities.
     Capabilities,
     /// Run system image components through the shared media graph.
     Image {
@@ -85,26 +87,10 @@ fn main() -> Result<()> {
             .context("budget overflow")?,
     )?;
     if matches!(args.command, Command::Capabilities) {
-        let spec = remdia::GraphSpec {
-            nodes: vec![remdia::graph::NodeSpec {
-                id: "capabilities".into(),
-                config: remdia::NodeConfig {
-                    component: format!("{}.image.capabilities", std::env::consts::OS),
-                    settings: serde_json::json!({}),
-                },
-            }],
-            edges: vec![],
+        let capabilities = unsafe {
+            serde_json::json!({"image":engine.image_capabilities()?,"audio":engine.audio_capabilities()?,"demux":engine.demux_capabilities()?})
         };
-        let mut graph = unsafe { engine.graph(&spec, Cancellation::default())? };
-        loop {
-            match graph.poll()? {
-                remdia::GraphEvent::Output { buffer, .. } => {
-                    println!("{}", std::str::from_utf8(buffer.bytes())?)
-                }
-                remdia::GraphEvent::End => break,
-                remdia::GraphEvent::Pending => {}
-            }
-        }
+        println!("{}", serde_json::to_string_pretty(&capabilities)?);
         return Ok(());
     }
     if let Command::Image {
@@ -143,10 +129,11 @@ fn main() -> Result<()> {
                 serde_json::json!({"format":if jpeg {"jpeg"} else {"png"},"quality":0.95}),
             ));
         }
-        let request = remdia::MediaRequest::Image(ImageRequest::new(
-            ImageInput::File(source.clone()),
-            operations,
-        ));
+        let mut request = ImageRequest::new(ImageInput::File(source.clone()), operations);
+        if args.system_only {
+            request.policy = remdia::ProviderPolicy::SystemOnly;
+        }
+        let request = remdia::MediaRequest::Image(request);
         if *plan {
             println!(
                 "{}",
@@ -212,6 +199,9 @@ fn main() -> Result<()> {
     };
     let mut request = Request::playback(source);
     request.timeout_ms = args.timeout_ms;
+    if args.system_only {
+        request.policy = remdia::ProviderPolicy::SystemOnly;
+    }
     match &args.command {
         Command::Probe { .. } => request.task = Task::Probe,
         Command::Plan { task, .. } => {
@@ -231,12 +221,11 @@ fn main() -> Result<()> {
         Command::Decode { software, .. } => request.hardware = !*software,
         _ => {}
     }
+    let mut session = unsafe { engine.open(request, Cancellation::default()) }?;
     if matches!(args.command, Command::Plan { .. }) {
-        println!("{}", serde_json::to_string_pretty(&engine.plan(&request)?)?);
+        println!("{}", serde_json::to_string_pretty(session.plan())?);
         return Ok(());
     }
-    // The user explicitly selects the installed native capability pack directory.
-    let mut session = unsafe { engine.open(request, Cancellation::default()) }?;
     match args.command {
         Command::Probe { .. } => println!("{}", serde_json::to_string_pretty(session.info())?),
         Command::Decode {

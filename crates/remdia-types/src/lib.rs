@@ -34,9 +34,18 @@ pub enum Task {
     Audio,
     Thumbnail,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderPolicy {
+    SystemOnly,
+    #[default]
+    SystemPreferred,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Request {
     pub source: String,
+    #[serde(default)]
+    pub policy: ProviderPolicy,
     pub task: Task,
     pub audio_rate: u32,
     pub audio_channels: u16,
@@ -50,6 +59,7 @@ impl Request {
     pub fn playback(source: impl Into<String>) -> Self {
         Self {
             source: source.into(),
+            policy: ProviderPolicy::SystemPreferred,
             task: Task::Playback,
             audio_rate: 48_000,
             audio_channels: 2,

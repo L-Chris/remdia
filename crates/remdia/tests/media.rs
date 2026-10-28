@@ -281,7 +281,7 @@ fn video_packets_cross_dlls_to_platform_decoder_and_seek() {
                 .graph
                 .nodes
                 .iter()
-                .any(|n| n.config.component == "native.demux")
+                .any(|n| n.config.component.ends_with(".demux"))
         );
         assert!(
             s.plan()
@@ -434,7 +434,7 @@ fn compressed_mp3_remux_graph_never_creates_a_decoder() {
             NodeSpec {
                 id: "demux".into(),
                 config: NodeConfig {
-                    component: "native.demux".into(),
+                    component: s.plan().graph.nodes[0].config.component.clone(),
                     settings: serde_json::to_value(request).unwrap(),
                 },
             },

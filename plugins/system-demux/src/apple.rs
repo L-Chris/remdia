@@ -16,6 +16,7 @@ struct Packet {
     keyframe: i32,
 }
 unsafe extern "C" {
+    fn rm_demux_supports(kind: *const c_char) -> i32;
     fn rm_demux_open(
         path: *const c_char,
         reader: *mut *mut c_void,
@@ -68,6 +69,7 @@ pub struct Demux {
     control: Control,
     generation: u64,
     ended: bool,
+    source: std::path::PathBuf,
 }
 impl Drop for Demux {
     fn drop(&mut self) {
@@ -84,6 +86,7 @@ impl Demux {
             "system demux currently requires a local file source"
         );
         let path = std::path::Path::new(&request.source).canonicalize()?;
+        let source = path.clone();
         let path = CString::new(
             path.to_str()
                 .ok_or_else(|| anyhow::anyhow!("invalid file path"))?,
@@ -106,6 +109,7 @@ impl Demux {
             control,
             generation: 1,
             ended: false,
+            source,
         };
         let bytes = unsafe { CStr::from_ptr(metadata) }.to_bytes();
         let media = serde_json::from_slice(bytes);
@@ -184,7 +188,20 @@ impl Component for Demux {
         if status(unsafe { rm_demux_artwork(self.reader, 8 * 1024 * 1024, &mut data, &mut size) })?
             == 0
         {
-            return Ok(None);
+            return Ok(
+                super::metadata::flac_artwork(&self.source, 8 * 1024 * 1024)?.map(|data| {
+                    MediaBuffer::new(
+                        BufferHeader {
+                            stream_id: 0,
+                            generation: self.generation,
+                            info: FrameInfo::Artwork {
+                                codec: "system-image".into(),
+                            },
+                        },
+                        vec![data],
+                    )
+                }),
+            );
         }
         let bytes = Bytes { data, size };
         ensure!(
@@ -203,4 +220,9 @@ impl Component for Demux {
             None,
         )))
     }
+}
+
+pub fn supports(kind: &str) -> Result<bool> {
+    let kind = CString::new(kind)?;
+    Ok(unsafe { rm_demux_supports(kind.as_ptr()) } != 0)
 }

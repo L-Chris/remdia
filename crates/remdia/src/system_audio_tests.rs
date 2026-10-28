@@ -223,13 +223,20 @@ fn system_decoders_match_the_certified_fixture_timeline() {
     ] {
         let mut request = crate::Request::playback(root.join(name).to_str().unwrap());
         request.task = crate::Task::Probe;
-        let session = unsafe {
-            engine
-                .open(request.clone(), Cancellation::default())
-                .unwrap()
-        };
-        let track = session
+        let source = TrustedFactory(engine.registry())
+            .create(
+                &NodeConfig {
+                    component: "native.demux".into(),
+                    settings: serde_json::to_value(&request).unwrap(),
+                },
+                Cancellation::default(),
+            )
+            .unwrap();
+        let track = source
             .info()
+            .media
+            .as_ref()
+            .unwrap()
             .tracks
             .iter()
             .find(|t| t.kind == "audio")
@@ -301,13 +308,20 @@ fn windows_decode_fixture(name: &str, expected: usize) {
         .join(name);
     let mut request = crate::Request::playback(source.to_str().unwrap());
     request.task = crate::Task::Probe;
-    let session = unsafe {
-        engine
-            .open(request.clone(), Cancellation::default())
-            .unwrap()
-    };
-    let track = session
+    let source = TrustedFactory(engine.registry())
+        .create(
+            &NodeConfig {
+                component: "native.demux".into(),
+                settings: serde_json::to_value(&request).unwrap(),
+            },
+            Cancellation::default(),
+        )
+        .unwrap();
+    let track = source
         .info()
+        .media
+        .as_ref()
+        .unwrap()
         .tracks
         .iter()
         .find(|t| t.kind == "audio")

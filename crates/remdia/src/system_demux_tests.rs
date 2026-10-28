@@ -159,3 +159,48 @@ fn windows_source_reader_keeps_compressed_video_separate_from_decode() {
         graph.reset(0).unwrap();
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires staged system media plugins"]
+fn system_only_playback_does_not_require_a_compatibility_pack() {
+    let mut engine = Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    engine
+        .registry
+        .candidates
+        .retain(|candidate| candidate.manifest.id != "native");
+    let source =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/av.mp4");
+    let mut request = Request::playback(source.to_str().unwrap());
+    request.policy = crate::ProviderPolicy::SystemOnly;
+    let mut session = unsafe { engine.open(request, Cancellation::default()).unwrap() };
+    assert!(
+        session
+            .plan()
+            .graph
+            .nodes
+            .iter()
+            .all(|node| !node.config.component.starts_with("native."))
+    );
+    session.seek(1_250_000).unwrap();
+    let mut audio = 0;
+    let mut video = 0;
+    while let Some(frame) = session.read().unwrap() {
+        assert!(frame.info().pts_us().unwrap() >= 1_250_000);
+        match frame.info() {
+            FrameInfo::Audio { .. } => audio += 1,
+            FrameInfo::Video { .. } => video += 1,
+            _ => {}
+        }
+    }
+    assert!(audio > 0 && video > 0);
+    assert!(
+        engine
+            .encode_mp3_with_policy(&[0.1; 16000], crate::ProviderPolicy::SystemOnly)
+            .is_err()
+    );
+}

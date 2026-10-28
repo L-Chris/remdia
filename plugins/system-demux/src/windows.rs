@@ -156,12 +156,13 @@ impl Demux {
             "system demux currently requires a local file source"
         );
         let source = std::path::Path::new(&request.source).canonicalize()?;
-        let source = source
-            .to_str()
-            .context("invalid media file path")?
-            .encode_utf16()
-            .chain(Some(0))
-            .collect::<Vec<_>>();
+        let source = source.to_str().context("invalid media file path")?;
+        let source = if let Some(unc) = source.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{unc}")
+        } else {
+            source.strip_prefix(r"\\?\").unwrap_or(source).to_owned()
+        };
+        let source = source.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
         let apartment = Apartment::new()?;
         startup()?;
         unsafe {
@@ -325,5 +326,41 @@ impl Component for Demux {
         self.generation = generation;
         self.ended.clear();
         Ok(())
+    }
+}
+
+pub fn supports(kind: &str) -> Result<bool> {
+    let _apartment = Apartment::new()?;
+    startup()?;
+    let wanted = match kind {
+        "mp4" => &["video/mp4", "audio/mp4"][..],
+        "mp3" => &["audio/mpeg"][..],
+        "wav" => &["audio/wav", "audio/x-wav"][..],
+        "flac" => &["audio/flac", "audio/x-flac"][..],
+        "ogg" => &["audio/ogg", "application/ogg"][..],
+        "aac" => &["audio/aac", "audio/aacp"][..],
+        "mkv" => &["video/x-matroska"][..],
+        _ => &[][..],
+    };
+    unsafe {
+        use windows::Win32::System::Com::{
+            CoTaskMemFree,
+            StructuredStorage::{PropVariantGetElementCount, PropVariantGetStringElem},
+        };
+        let mut types = MFGetSupportedMimeTypes()?;
+        let count = PropVariantGetElementCount(&types);
+        let mut found = false;
+        for index in 0..count.min(1024) {
+            if let Ok(value) = PropVariantGetStringElem(&types, index) {
+                let name = value.to_string();
+                CoTaskMemFree(Some(value.0.cast()));
+                if name.as_deref().is_ok_and(|name| wanted.contains(&name)) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        PropVariantClear(&mut types)?;
+        Ok(found)
     }
 }

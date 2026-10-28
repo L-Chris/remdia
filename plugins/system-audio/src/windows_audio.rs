@@ -304,7 +304,20 @@ impl Component for Decoder {
         else {
             anyhow::bail!("AAC decoder requires compressed packets")
         };
-        let data = input.bytes();
+        let mut prefix = Vec::new();
+        if self.track.codec == "flac" && self.discontinuity {
+            let extra: Vec<u8> =
+                serde_json::from_value(self.track.initialization["extra_data"].clone())?;
+            ensure!(extra.len() == 34, "invalid FLAC streaminfo");
+            prefix.extend_from_slice(b"fLaC\x80\0\0\x22");
+            prefix.extend_from_slice(&extra);
+            prefix.extend_from_slice(input.bytes());
+        }
+        let data = if prefix.is_empty() {
+            input.bytes()
+        } else {
+            &prefix
+        };
         ensure!(
             !data.is_empty() && data.len() <= 16 * 1024 * 1024,
             "AAC packet exceeds budget"
@@ -536,4 +549,28 @@ impl Component for Decoder {
         self.generation = generation;
         Ok(())
     }
+}
+
+pub fn capabilities() -> Result<serde_json::Value> {
+    let _apartment = Apartment::new()?;
+    startup()?;
+    let mut decode = Vec::new();
+    for (codec, class) in [
+        ("aac", CMSAACDecMFT),
+        ("mp3", CMP3DecMediaObject),
+        ("flac", CMSFLACDecMFT),
+        ("alac", CMSALACDecMFT),
+        ("ac3", CMSDDPlusDecMFT),
+        ("eac3", CMSDDPlusDecMFT),
+    ] {
+        if unsafe { CoCreateInstance::<_, IMFTransform>(&class, None, CLSCTX_INPROC_SERVER) }
+            .is_ok()
+        {
+            decode.push(codec);
+        }
+    }
+    decode.extend(["pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"]);
+    Ok(
+        serde_json::json!({"decode":decode,"resample":unsafe {CoCreateInstance::<_,IMFTransform>(&CResamplerMediaObject,None,CLSCTX_INPROC_SERVER)}.is_ok(),"mp3_encode":unsafe {CoCreateInstance::<_,IMFTransform>(&MP3ACMCodecWrapper,None,CLSCTX_INPROC_SERVER)}.is_ok()}),
+    )
 }

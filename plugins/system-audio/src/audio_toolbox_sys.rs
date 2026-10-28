@@ -186,3 +186,35 @@ pub unsafe fn audio_converter_convert_buffer(
 ) -> i32 {
     unsafe { (fw.convert)(converter, size, input, output_size, output) }
 }
+
+pub fn format_ids(encode: bool) -> anyhow::Result<Vec<u32>> {
+    type Info = unsafe extern "C" fn(u32, u32, *const c_void, *mut u32) -> i32;
+    type Get = unsafe extern "C" fn(u32, u32, *const c_void, *mut u32, *mut c_void) -> i32;
+    let fw = framework().map_err(anyhow::Error::msg)?;
+    unsafe {
+        let info = fw._library.get::<Info>(b"AudioFormatGetPropertyInfo\0")?;
+        let get = fw._library.get::<Get>(b"AudioFormatGetProperty\0")?;
+        let property = u32::from_be_bytes(if encode { *b"acof" } else { *b"acif" });
+        let mut size = 0;
+        anyhow::ensure!(
+            info(property, 0, std::ptr::null(), &mut size) == 0
+                && size <= 65536
+                && size.is_multiple_of(4),
+            "cannot enumerate system audio formats"
+        );
+        let mut formats = vec![0; size as usize / 4];
+        anyhow::ensure!(
+            get(
+                property,
+                0,
+                std::ptr::null(),
+                &mut size,
+                formats.as_mut_ptr().cast()
+            ) == 0
+                && size as usize <= formats.len() * 4,
+            "invalid system audio format list"
+        );
+        formats.truncate(size as usize / 4);
+        Ok(formats)
+    }
+}

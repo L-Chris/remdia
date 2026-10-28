@@ -4,15 +4,16 @@ mod jobs;
 pub mod plan;
 pub mod registry;
 use anyhow::{Context, Result, ensure};
-pub use jobs::{JobPlan, JobSession, MediaRequest, ProviderPolicy};
+pub use jobs::{JobPlan, JobSession, MediaRequest};
 use registry::{Registry, TrustedFactory};
 pub use remdia_buffer::Budget;
 use remdia_buffer::Reservation;
+use remdia_graph::Factory;
 pub use remdia_graph::{
     self as graph, BufferHeader, Cancellation, EdgeSpec, FrameInfo, Graph, GraphEvent, GraphSpec,
-    Interrupted, MediaBuffer, MediaInfo, NodeConfig, NodeSpec, Rational, Request, Task,
+    Interrupted, MediaBuffer, MediaInfo, NodeConfig, NodeSpec, ProviderPolicy, Rational, Request,
+    Task,
 };
-use remdia_graph::{Factory, Receive, Submit};
 use serde_json::json;
 use std::{
     path::Path,
@@ -42,6 +43,62 @@ pub struct Engine {
     budget: Budget,
 }
 impl Engine {
+    fn capability_value(
+        &self,
+        component: &str,
+        settings: serde_json::Value,
+        cancel: Cancellation,
+    ) -> Result<serde_json::Value> {
+        let spec = GraphSpec {
+            nodes: vec![NodeSpec {
+                id: "capabilities".into(),
+                config: NodeConfig {
+                    component: component.into(),
+                    settings,
+                },
+            }],
+            edges: vec![],
+        };
+        let mut graph = Graph::build(
+            &spec,
+            &TrustedFactory(&self.registry),
+            self.budget.clone(),
+            cancel,
+        )?;
+        let started = Instant::now();
+        loop {
+            ensure!(
+                started.elapsed() < Duration::from_secs(30),
+                "system capability query timed out"
+            );
+            match graph.poll()? {
+                GraphEvent::Output { buffer, .. } => {
+                    return Ok(serde_json::from_slice(buffer.bytes())?);
+                }
+                GraphEvent::End => anyhow::bail!("missing system capabilities"),
+                GraphEvent::Pending => {}
+            }
+        }
+    }
+    /// Enumerate installed system audio factories through an ordinary source graph.
+    /// # Safety
+    /// Installed capability packs must be trusted and obey the plugin ABI.
+    pub unsafe fn audio_capabilities(&self) -> Result<serde_json::Value> {
+        self.capability_value(
+            &format!("{}.audio.capabilities", std::env::consts::OS),
+            json!({}),
+            Cancellation::default(),
+        )
+    }
+    /// # Safety
+    /// Installed capability packs must be trusted and obey the plugin ABI.
+    pub unsafe fn demux_capabilities(&self) -> Result<serde_json::Value> {
+        self.capability_value(
+            &format!("{}.demux.capabilities", std::env::consts::OS),
+            json!({}),
+            Cancellation::default(),
+        )
+    }
     /// Bind caller-owned buffers to explicit core.buffer.source nodes. All
     /// downstream nodes use the ordinary plugin factory and graph scheduler.
     /// # Safety
@@ -61,13 +118,23 @@ impl Engine {
         })
     }
     pub fn encode_mp3(&self, samples: &[f32]) -> Result<Frame> {
+        self.encode_mp3_with_policy(samples, ProviderPolicy::SystemPreferred)
+    }
+    pub fn encode_mp3_with_policy(&self, samples: &[f32], policy: ProviderPolicy) -> Result<Frame> {
         let directory = self
             .registry
             .candidates
             .first()
             .and_then(|c| c.path.parent())
             .context("no capability packs installed")?;
-        encode_pcm_mp3(directory, &self.budget, Cancellation::default(), 1, samples)
+        encode_pcm_mp3(
+            directory,
+            &self.budget,
+            Cancellation::default(),
+            1,
+            samples,
+            policy,
+        )
     }
     pub fn registry(&self) -> &Registry {
         &self.registry
@@ -95,9 +162,34 @@ impl Engine {
         self.plan(&request)?;
         cancel.begin();
         let factory = TrustedFactory(&self.registry);
+        let platform = std::env::consts::OS;
+        let caps_component = format!("{platform}.demux.capabilities");
+        let demux_component = if self.registry.select(&caps_component).is_ok() {
+            let caps = self.capability_value(
+                &caps_component,
+                serde_json::to_value(&request)?,
+                cancel.clone(),
+            )?;
+            if caps["supported"] == true {
+                format!("{platform}.demux")
+            } else {
+                ensure!(
+                    request.policy != ProviderPolicy::SystemOnly,
+                    "system demux unavailable: {}",
+                    caps["reason"]
+                );
+                "native.demux".into()
+            }
+        } else {
+            ensure!(
+                request.policy != ProviderPolicy::SystemOnly,
+                "system demux capability pack is not installed"
+            );
+            "native.demux".into()
+        };
         let demux = factory.create(
             &NodeConfig {
-                component: "native.demux".into(),
+                component: demux_component.clone(),
                 settings: serde_json::to_value(&request)?,
             },
             cancel.clone(),
@@ -107,7 +199,22 @@ impl Engine {
             .media
             .clone()
             .context("demuxer did not provide stream configurations")?;
-        let plan = plan::Plan::for_media(&request, &info, self.budget.limit())?;
+        let audio_component = format!("{platform}.audio.capabilities");
+        let audio_caps = if matches!(request.task, Task::Playback | Task::Audio)
+            && info.tracks.iter().any(|t| t.kind == "audio")
+            && self.registry.select(&audio_component).is_ok()
+        {
+            self.capability_value(&audio_component, json!({}), cancel.clone())?
+        } else {
+            serde_json::Value::Null
+        };
+        let plan = plan::Plan::for_media(
+            &request,
+            &info,
+            self.budget.limit(),
+            &demux_component,
+            &audio_caps,
+        )?;
         let mut instances = vec![("demux".into(), demux)];
         for node in plan.graph.nodes.iter().skip(1) {
             instances.push((
@@ -148,6 +255,7 @@ fn encode_pcm_mp3(
     cancel: Cancellation,
     generation: u64,
     samples: &[f32],
+    policy: ProviderPolicy,
 ) -> Result<Frame> {
     ensure!(
         !samples.is_empty() && samples.len() <= 120 * 16000,
@@ -155,13 +263,38 @@ fn encode_pcm_mp3(
     );
     cancel.begin();
     let registry = Registry::discover(directory)?;
-    let mut encoder = TrustedFactory(&registry).create(
-        &NodeConfig {
-            component: "native.mp3.encode".into(),
-            settings: json!({"rate":16000,"channels":1}),
-        },
-        cancel.clone(),
-    )?;
+    ensure!(
+        cfg!(windows) || policy != ProviderPolicy::SystemOnly,
+        "system MP3 encoding is unavailable on this platform"
+    );
+    let engine = Engine {
+        registry,
+        budget: budget.clone(),
+    };
+    let component = if cfg!(windows) {
+        "windows.mp3.encode"
+    } else {
+        "native.mp3.encode"
+    };
+    let spec = GraphSpec {
+        nodes: vec![
+            NodeSpec {
+                id: "input".into(),
+                config: NodeConfig {
+                    component: "core.buffer.source".into(),
+                    settings: json!({}),
+                },
+            },
+            NodeSpec {
+                id: "encode".into(),
+                config: NodeConfig {
+                    component: component.into(),
+                    settings: json!({"rate":16000,"channels":1}),
+                },
+            },
+        ],
+        edges: vec![EdgeSpec::between("input", "encode", None)],
+    };
     let mut header = BufferHeader {
         stream_id: 0,
         generation,
@@ -177,19 +310,24 @@ fn encode_pcm_mp3(
         header.clone(),
         vec![samples.iter().flat_map(|s| s.to_le_bytes()).collect()],
     );
-    ensure!(
-        encoder.submit(&input)? == Submit::Accepted,
-        "encoder blocked on first input"
-    );
-    encoder.drain()?;
+    // The encoding job owns its own graph generation; the returned frame keeps
+    // the requesting session's generation after byte assembly.
+    let mut input = input;
+    input.header.generation = 1;
+    let mut graph = jobs::bound_graph(
+        &engine,
+        &spec,
+        std::collections::BTreeMap::from([("input".into(), vec![input])]),
+        cancel,
+    )?;
     let reservation = budget.reserve(16 * 1024 * 1024)?;
     let mut output = Vec::new();
     let mut iterations = 0;
     loop {
         iterations += 1;
         ensure!(iterations < 10000, "MP3 encoder failed to drain");
-        match encoder.receive()? {
-            Receive::Output(b) => {
+        match graph.poll()? {
+            GraphEvent::Output { buffer: b, .. } => {
                 let offset = match b.header.info {
                     FrameInfo::Bytes { offset, .. } => {
                         offset.unwrap_or(output.len() as u64) as usize
@@ -203,9 +341,8 @@ fn encode_pcm_mp3(
                 output.resize(output.len().max(end), 0);
                 output[offset..end].copy_from_slice(b.bytes());
             }
-            Receive::End => break,
-            Receive::Reconfigured => anyhow::bail!("MP3 encoder changed its output contract"),
-            Receive::NeedInput => anyhow::bail!("MP3 encoder requested input after drain"),
+            GraphEvent::End => break,
+            GraphEvent::Pending => {}
         }
     }
     header.info = FrameInfo::Blob {
@@ -395,6 +532,7 @@ impl Session {
             self.cancel.clone(),
             self.generation(),
             &chunk.samples,
+            self.request.policy,
         )
     }
 }

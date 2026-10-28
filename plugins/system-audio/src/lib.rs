@@ -9,6 +9,7 @@ mod apple_pcm;
 mod apple_resample;
 #[cfg(target_os = "macos")]
 mod audio_toolbox_sys;
+mod capabilities;
 #[cfg(any(windows, target_os = "macos", test))]
 mod mix;
 #[cfg(windows)]
@@ -36,6 +37,12 @@ fn descriptors() -> Vec<ComponentDescriptor> {
         input: Some(PortCaps::new(DataKind::Audio)),
         output: PortCaps::new(DataKind::Audio),
     });
+    result.push(ComponentDescriptor {
+        id: format!("{}.audio.capabilities", std::env::consts::OS),
+        role: "source".into(),
+        input: None,
+        output: PortCaps::new(DataKind::Bytes),
+    });
     #[cfg(windows)]
     result.push(ComponentDescriptor {
         id: "windows.mp3.encode".into(),
@@ -46,6 +53,9 @@ fn descriptors() -> Vec<ComponentDescriptor> {
     result
 }
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
+    if config.component == format!("{}.audio.capabilities", std::env::consts::OS) {
+        return Ok(Box::new(capabilities::Capabilities::new()?));
+    }
     let _ = control;
     #[cfg(target_os = "macos")]
     if config.component == "macos.audio.resample" {

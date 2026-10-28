@@ -1,18 +1,11 @@
 use crate::*;
-use remdia_graph::{Component, DataKind, NodeInfo, PlaneOwner, PortCaps};
+use remdia_graph::{Component, DataKind, NodeInfo, PlaneOwner, PortCaps, Receive};
 use serde::Serialize;
 use std::collections::{BTreeMap, VecDeque};
 
 pub enum MediaRequest {
     Media(Request),
     Image(image::ImageRequest),
-}
-#[derive(Clone, Copy, Default, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderPolicy {
-    SystemOnly,
-    #[default]
-    SystemPreferred,
 }
 #[derive(Serialize)]
 pub struct JobPlan {
@@ -52,7 +45,13 @@ impl Engine {
     /// Installed capability packs must be trusted and obey the plugin ABI.
     pub unsafe fn explain_job(&self, request: &MediaRequest) -> Result<JobPlan> {
         match request {
-            MediaRequest::Media(_) => self.plan_job(request),
+            MediaRequest::Media(request) => {
+                let session = unsafe { self.open(request.clone(), Cancellation::default())? };
+                Ok(JobPlan {
+                    graph: session.plan().graph.clone(),
+                    notes: session.plan().notes.clone(),
+                })
+            }
             MediaRequest::Image(request) => unsafe { request.resolved_plan(self) },
         }
     }

@@ -31,24 +31,21 @@ impl Encoder {
         unsafe {
             let transform: IMFTransform =
                 CoCreateInstance(&MP3ACMCodecWrapper, None, CLSCTX_INPROC_SERVER)?;
-            let mut selected = None;
-            for index in 0..1024 {
-                let format = match transform.GetOutputAvailableType(0, index) {
-                    Ok(format) => format,
-                    Err(error) if error.code() == MF_E_NO_MORE_TYPES => break,
-                    Err(error) => return Err(error).context("enumerate MP3 encoding formats"),
-                };
-                if format.GetGUID(&MF_MT_SUBTYPE)? == MFAudioFormat_MP3
-                    && format.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)? == rate
-                    && format.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS)? == u32::from(channels)
-                    && format.GetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND)? == 8000
-                {
-                    selected = Some(format);
-                    break;
-                }
-            }
-            let output = selected
-                .context("system MP3 encoder has no 64-kbps profile for the requested format")?;
+            let output = MFCreateMediaType()?;
+            output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+            output.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_MP3)?;
+            output.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)?;
+            output.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, u32::from(channels))?;
+            output.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 8000)?;
+            let block = if rate >= 32000 {
+                144 * 64000 / rate
+            } else {
+                72 * 64000 / rate
+            };
+            let mut extra = vec![1, 0, 2, 0, 0, 0];
+            extra.extend_from_slice(&(block as u16).to_le_bytes());
+            extra.extend_from_slice(&[1, 0, 0, 0]);
+            output.SetBlob(&MF_MT_USER_DATA, &extra)?;
             transform.SetOutputType(0, &output, 0)?;
             let input = MFCreateMediaType()?;
             input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;

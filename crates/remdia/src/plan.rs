@@ -1,4 +1,4 @@
-use crate::{Request, Task, registry::Registry};
+use crate::{ProviderPolicy, Request, Task, registry::Registry};
 use anyhow::{Result, ensure};
 use remdia_graph::*;
 use serde::Serialize;
@@ -17,15 +17,31 @@ impl Plan {
             budget >= request.max_frame_bytes.max(request.max_packet_bytes),
             "budget below maximum output reservation"
         );
-        registry.select("native.demux")?;
-        Ok(Self {task:request.task,graph:GraphSpec {nodes:vec![NodeSpec {id:"demux".into(),config:NodeConfig {component:"native.demux".into(),settings:serde_json::to_value(request)?}}],edges:Vec::new()},managed_budget_bytes:budget,
+        let system = format!("{}.demux", std::env::consts::OS);
+        let demux = if registry.select(&system).is_ok() {
+            system
+        } else {
+            ensure!(
+                request.policy != ProviderPolicy::SystemOnly,
+                "system demux capability pack is not installed"
+            );
+            "native.demux".into()
+        };
+        registry.select(&demux)?;
+        Ok(Self {task:request.task,graph:GraphSpec {nodes:vec![NodeSpec {id:"demux".into(),config:NodeConfig {component:demux,settings:serde_json::to_value(request)?}}],edges:Vec::new()},managed_budget_bytes:budget,
    notes:vec!["Structural probe plan; open/explain discovers tracks and builds decoder/filter branches".into(),"No FFmpeg runtime, build or codec dependency".into(),"Managed CPU buffer ledger excludes codec/driver private memory".into()]})
     }
-    pub(crate) fn for_media(request: &Request, media: &MediaInfo, budget: usize) -> Result<Self> {
+    pub(crate) fn for_media(
+        request: &Request,
+        media: &MediaInfo,
+        budget: usize,
+        demux: &str,
+        audio_caps: &serde_json::Value,
+    ) -> Result<Self> {
         let mut nodes = vec![NodeSpec {
             id: "demux".into(),
             config: NodeConfig {
-                component: "native.demux".into(),
+                component: demux.into(),
                 settings: serde_json::to_value(request)?,
             },
         }];
@@ -50,14 +66,26 @@ impl Plan {
                 let id = format!("decode_{}", track.index);
                 let component = if track.kind == "video" {
                     match std::env::consts::OS {
-                        "windows" => "windows.video.decode",
-                        "macos" => "macos.video.decode",
+                        "windows" => "windows.video.decode".to_owned(),
+                        "macos" => "macos.video.decode".to_owned(),
                         os => anyhow::bail!("no default video decoder for {os}"),
                     }
                 } else {
-                    "native.audio.decode"
+                    let available = audio_caps["decode"]
+                        .as_array()
+                        .is_some_and(|list| list.iter().any(|codec| codec == &track.codec));
+                    if available {
+                        format!("{}.audio.decode", std::env::consts::OS)
+                    } else {
+                        ensure!(
+                            request.policy != ProviderPolicy::SystemOnly,
+                            "system audio decoder unavailable for {}",
+                            track.codec
+                        );
+                        "native.audio.decode".into()
+                    }
                 };
-                nodes.push(NodeSpec {id:id.clone(),config:NodeConfig {component:component.into(),settings:json!({"track":track,"max_frame_bytes":request.max_frame_bytes,"hardware":request.hardware})}});
+                nodes.push(NodeSpec {id:id.clone(),config:NodeConfig {component,settings:json!({"track":track,"max_frame_bytes":request.max_frame_bytes,"hardware":request.hardware})}});
                 edges.push(EdgeSpec::between(
                     "demux",
                     id.clone(),
@@ -65,7 +93,16 @@ impl Plan {
                 ));
                 if track.kind == "audio" {
                     let filter = format!("audio_{}", track.index);
-                    nodes.push(NodeSpec {id:filter.clone(),config:NodeConfig {component:"native.audio.resample".into(),settings:json!({"rate":request.audio_rate,"channels":request.audio_channels})}});
+                    let resample = if audio_caps["resample"] == true {
+                        format!("{}.audio.resample", std::env::consts::OS)
+                    } else {
+                        ensure!(
+                            request.policy != ProviderPolicy::SystemOnly,
+                            "system resampler unavailable"
+                        );
+                        "native.audio.resample".into()
+                    };
+                    nodes.push(NodeSpec {id:filter.clone(),config:NodeConfig {component:resample,settings:json!({"rate":request.audio_rate,"channels":request.audio_channels})}});
                     edges.push(EdgeSpec::between(id, filter, None));
                 } else if request.task == Task::Thumbnail {
                     nodes.push(NodeSpec {

@@ -37,6 +37,7 @@ static uint64_t samples(CMTime duration,uint32_t rate) {return CMTIME_IS_NUMERIC
 @property AVURLAsset *asset;
 @property AVAssetReader *reader;
 @property NSArray<RmTrack*> *tracks;
+@property NSData *artwork;
 @end
 @implementation RmReader
 @end
@@ -138,6 +139,15 @@ int rm_demux_open(const char *path,void **reader,char **metadata) { @autorelease
    if(!AudioFileGetProperty(file,kAudioFilePropertyPacketTableInfo,&size,&table) && table.mNumberValidFrames>0) {
     RmTrack *track=nil;for(RmTrack *candidate in tracks)if(candidate.rate){track=candidate;break;}if(track){track.validFrames=table.mNumberValidFrames;track.primeFrames=MAX(0,table.mPrimingFrames);track.tailFrames=MAX(0,table.mRemainderFrames);}
    }
+   CFDictionaryRef information=NULL;size=sizeof(information);
+   if(!AudioFileGetProperty(file,kAudioFilePropertyInfoDictionary,&size,&information) && information) {
+    NSDictionary *values=CFBridgingRelease(information);
+    for(NSString *key in @[@"artist",@"album",@"title"])if([values[key] isKindOfClass:NSString.class])tags[key]=values[key];
+   }
+   CFDataRef artwork=NULL;size=sizeof(artwork);
+   if(!AudioFileGetProperty(file,kAudioFilePropertyAlbumArtwork,&size,&artwork) && artwork) {
+    NSData *image=CFBridgingRelease(artwork);if(image.length<=8*1024*1024)state.artwork=image;
+   }
    AudioFileClose(file);
   }
  }
@@ -170,7 +180,12 @@ static int fill(RmReader *reader,RmTrack *track) {
   if(track.first&&track.rate) {
    CFTypeRef trim=CMGetAttachment(track.sample,kCMSampleBufferAttachmentKey_TrimDurationAtStart,NULL);
    if(trim)track.startTrim=samples(CMTimeMakeFromDictionary(trim),track.rate);
-   if([track.codec isEqualToString:@"mp3"] && track.manualShift && nanos(CMSampleBufferGetPresentationTimeStamp(track.sample))==0)track.startTrim=track.primeFrames;
+   if([track.codec isEqualToString:@"mp3"] && track.primeFrames && nanos(CMSampleBufferGetPresentationTimeStamp(track.sample))==0) {
+    CMTime correction=CMTimeSubtract(CMSampleBufferGetOutputPresentationTimeStamp(track.sample),CMSampleBufferGetPresentationTimeStamp(track.sample));
+    if(trim)correction=CMTimeSubtract(correction,CMTimeMakeFromDictionary(trim));
+    int64_t applied=-CMTimeConvertScale(correction,track.rate,kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
+    track.manualShift=MAX(0,(int64_t)track.primeFrames-applied);track.startTrim=track.primeFrames;
+   }
    track.first=NO;
   }
   CFTypeRef trim=CMGetAttachment(track.sample,kCMSampleBufferAttachmentKey_TrimDurationAtEnd,NULL);
@@ -203,8 +218,9 @@ int rm_demux_read(void *handle,size_t limit,RmPacket *out) { @autoreleasepool {
  out->pts=CMTimeConvertScale(pts,out->time_scale,kCMTimeRoundingMethod_RoundHalfAwayFromZero).value-track.manualShift;
  out->dts=CMTimeConvertScale(dts,out->time_scale,kCMTimeRoundingMethod_RoundHalfAwayFromZero).value-track.manualShift;
  out->duration=CMTimeConvertScale(CMTimeMultiply(timing.duration,(int32_t)count),out->time_scale,kCMTimeRoundingMethod_RoundHalfAwayFromZero).value;
+ uint64_t packetFrames=out->duration>0?(uint64_t)out->duration:track.packetFrames;
  if([track.codec isEqualToString:@"vorbis"] && track.startTrim)out->duration=0;
- out->trim_start=[track.codec isEqualToString:@"opus"]?0:track.startTrim;track.startTrim=0;
+ out->trim_start=[track.codec isEqualToString:@"opus"]?0:MIN(track.startTrim,packetFrames);track.startTrim-=MIN(track.startTrim,packetFrames);
  out->trim_end=track.position+count==CMSampleBufferGetNumSamples(sample)?track.endTrim:0;
  if([track.codec isEqualToString:@"aac"] && track.packetFrames>0 && out->duration>0 && out->duration<track.packetFrames)out->trim_end=track.packetFrames-out->duration;
  if([track.codec isEqualToString:@"flac"]||[track.codec isEqualToString:@"alac"])out->trim_end=0;
@@ -219,6 +235,10 @@ int rm_demux_read(void *handle,size_t limit,RmPacket *out) { @autoreleasepool {
 int rm_demux_seek(void *handle,int64_t target) { @autoreleasepool {return start((__bridge RmReader*)handle,target);}}
 int rm_demux_artwork(void *handle,size_t limit,uint8_t **data,size_t *size) { @autoreleasepool {
  *data=NULL;*size=0;RmReader *reader=(__bridge RmReader*)handle;
+ if(reader.artwork) {
+  NSData *image=reader.artwork;if(image.length>limit)return fail(@"artwork exceeds budget");
+  *data=malloc(image.length);if(!*data)return fail(@"artwork allocation failed");*size=image.length;memcpy(*data,image.bytes,image.length);return 1;
+ }
  for(AVMetadataItem *item in reader.asset.commonMetadata)if([item.commonKey isEqualToString:AVMetadataCommonKeyArtwork]) {
   NSData *image=item.dataValue;if(!image)return 0;if(image.length>limit)return fail(@"artwork exceeds budget");
   *data=malloc(image.length);if(!*data)return fail(@"artwork allocation failed");*size=image.length;memcpy(*data,image.bytes,image.length);return 1;
@@ -226,3 +246,9 @@ int rm_demux_artwork(void *handle,size_t limit,uint8_t **data,size_t *size) { @a
  return 0;
 }}
 void rm_demux_close(void *handle) { @autoreleasepool {RmReader *reader=CFBridgingRelease(handle);[reader.reader cancelReading];}}
+
+int rm_demux_supports(const char *type) { @autoreleasepool {
+ NSDictionary *types=@{@"mp4":@[@"public.mpeg-4",@"com.apple.quicktime-movie"],@"mp3":@[@"public.mp3"],@"wav":@[@"com.microsoft.waveform-audio"],@"flac":@[@"org.xiph.flac"],@"ogg":@[@"org.xiph.ogg-audio"],@"aiff":@[@"public.aiff-audio"],@"aac":@[@"public.aac-audio"]};
+ for(NSString *identifier in types[@(type)])if([AVURLAsset.audiovisualTypes containsObject:identifier])return 1;
+ return 0;
+}}
