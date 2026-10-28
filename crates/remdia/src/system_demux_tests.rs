@@ -242,6 +242,7 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
     request.task = crate::Task::Audio;
     request.policy = crate::ProviderPolicy::SystemOnly;
     let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
+    eprintln!("lossless source: {:?}", session.info());
     // Match an application seek issued immediately after metadata publication.
     for target in [3_600_000, 200_000, 3_600_000, 0] {
         session.seek(target).unwrap();
