@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate deterministic B-frame video, PCM, tags and cover-art test fixtures."""
 import argparse
+import json
 import subprocess
 from pathlib import Path
 p = argparse.ArgumentParser()
@@ -19,3 +20,5 @@ run('-i', out / 'audio.wav', '-i', out / 'cover.png', '-map', '0:a', '-map', '1:
 run('-i', out / 'av.mkv', '-c:v', 'mpeg2video', '-an', '-f', 'mpegts', out / 'origin.ts')
 (out / 'broken.bin').write_bytes(b'not a media container\x00')
 print(out)
+
+(out / 'probe.json').write_text(json.dumps(dict(source=str(out / 'av.mkv'), task='probe', audio_rate=48000, audio_channels=2, hardware=False, threads=2, timeout_ms=3000, max_frame_bytes=134217728, max_packet_bytes=16777216)))

@@ -598,10 +598,11 @@ fn video_output(
 }
 fn open_video(params: codec::Parameters, r: &Request) -> Result<f::decoder::Video> {
     #[cfg(windows)]
-    if r.hardware && r.task != Task::Thumbnail {
-        if let Ok(dec) = open_d3d11(params.clone(), r.threads) {
-            return Ok(dec);
-        }
+    if r.hardware
+        && r.task != Task::Thumbnail
+        && let Ok(dec) = open_d3d11(params.clone(), r.threads)
+    {
+        return Ok(dec);
     }
     let mut context = codec::context::Context::from_parameters(params)?;
     context.set_threading(codec::threading::Config::count(r.threads as usize));

@@ -3,6 +3,7 @@ use libloading::Library;
 use remdia_plugin_abi::*;
 use serde::{Deserialize, Serialize};
 use std::{
+    io::Read,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -36,7 +37,10 @@ impl Registry {
             .into_iter()
             .filter(|p| p.extension().is_some_and(|e| e == "json"))
         {
-            let bytes = std::fs::read(&path)?;
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)?
+                .take(65537)
+                .read_to_end(&mut bytes)?;
             ensure!(bytes.len() <= 65536, "oversized plugin manifest");
             let manifest: Manifest = serde_json::from_slice(&bytes)
                 .with_context(|| format!("manifest {}", path.display()))?;
@@ -54,6 +58,12 @@ impl Registry {
                         Some(std::path::Component::Normal(_))
                     ),
                 "plugin library must be a filename"
+            );
+            ensure!(
+                !candidates
+                    .iter()
+                    .any(|c: &Candidate| c.manifest.id == manifest.id),
+                "duplicate plugin id"
             );
             candidates.push(Candidate {
                 path: path.parent().unwrap().join(relative),

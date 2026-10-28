@@ -58,7 +58,12 @@ fn decode_drain_seek_and_frame_lifetimes() {
     let prefix = f.bytes()[..32].to_vec();
     drop(s);
     drop(e);
-    assert_eq!(&f.bytes()[..32], prefix);
+    let f = std::thread::spawn(move || {
+        assert_eq!(&f.bytes()[..32], prefix);
+        f
+    })
+    .join()
+    .unwrap();
     assert_eq!(f.generation(), 1);
 }
 #[test]
