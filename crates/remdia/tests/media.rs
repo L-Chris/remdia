@@ -100,6 +100,12 @@ fn chunks_mp3_gapless_and_artwork() {
     assert!(p.info().tracks.iter().any(|t| t.attached_picture));
     let art = p.artwork().unwrap().unwrap();
     assert!(art.bytes().starts_with(b"\x89PNG"));
+    let mut converted = open(&e, "sar.mkv", Task::Playback);
+    let frame = converted.read().unwrap().unwrap();
+    assert!(
+        matches!(frame.info(), FrameInfo::Video {format, sample_aspect_ratio: Rational {num:4, den:3}, ..} if format == "rgba")
+    );
+    drop(frame);
     let mut t = open(&e, "av.mkv", Task::Thumbnail);
     t.seek(1_000_000).unwrap();
     let thumb = t.read().unwrap().unwrap();

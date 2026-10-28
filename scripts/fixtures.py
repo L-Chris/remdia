@@ -22,3 +22,5 @@ run('-i', out / 'av.mkv', '-c:v', 'mpeg2video', '-an', '-f', 'mpegts', out / 'or
 print(out)
 
 (out / 'probe.json').write_text(json.dumps(dict(source=str(out / 'av.mkv'), task='probe', audio_rate=48000, audio_channels=2, hardware=False, threads=2, timeout_ms=3000, max_frame_bytes=134217728, max_packet_bytes=16777216)))
+
+run('-i', out / 'av.mkv', '-an', '-c:v', 'ffv1', '-pix_fmt', 'yuv422p', '-vf', 'setsar=4/3', out / 'sar.mkv')

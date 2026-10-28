@@ -547,6 +547,8 @@ fn video_output(
         )?;
         let mut rgba = frame::Video::empty();
         scaler.run(&video, &mut rgba)?;
+        let result = unsafe { f::ffi::av_frame_copy_props(rgba.as_mut_ptr(), video.as_ptr()) };
+        ensure!(result >= 0, "copy converted video metadata failed");
         video = rgba;
     }
     let mut bytes = 0usize;
