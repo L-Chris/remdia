@@ -184,7 +184,23 @@ int rm_image_supports(const char *type, int encode) {
     else return 0;
     ComPtr<IUnknown> next;
     while (list->Next(1, &next, nullptr) == S_OK) {
-        ComPtr<IWICBitmapCodecInfo> codec; if (SUCCEEDED(next.As(&codec))) { GUID container; if (SUCCEEDED(codec->GetContainerFormat(&container)) && container == wanted) return 1; }
+        ComPtr<IWICBitmapCodecInfo> codec; if (SUCCEEDED(next.As(&codec))) { GUID container; if (SUCCEEDED(codec->GetContainerFormat(&container)) && container == wanted) {
+            // Store codec registration can survive an unavailable/disabled package.
+            // Certify WebP activation with valid bytes rather than advertising a stub.
+            if (wanted == GUID_ContainerFormatWebp && !encode) {
+                static const uint8_t fixture[] = {82,73,70,70,70,0,0,0,87,69,66,80,86,80,56,76,57,0,0,0,47,31,192,15,16,205,85,32,34,2,30,136,4,0,0,0,0,128,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,12,0,0,64,68,68,158,254,0};
+                ComPtr<IWICBitmapDecoder> test;
+                if (FAILED(decoder(f.Get(), fixture, sizeof(fixture), test))) continue;
+                ComPtr<IWICBitmapFrameDecode> frame;
+                if (FAILED(test->GetFrame(0, &frame))) continue;
+                ComPtr<IWICFormatConverter> rgba;
+                if (FAILED(f->CreateFormatConverter(&rgba))) continue;
+                if (FAILED(rgba->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) continue;
+                WICRect rect = {0, 0, 1, 1}; uint8_t pixel[4];
+                if (FAILED(rgba->CopyPixels(&rect, 4, 4, pixel))) continue;
+            }
+            return 1;
+        } }
         next.Reset();
     }
     return 0;
