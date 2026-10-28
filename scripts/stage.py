@@ -38,7 +38,10 @@ for pack, capabilities in [
     ('macos', ['macos.video.decode']),
     ('image', [f'{os_name}.image.{op}' for op in ['decode', 'probe', 'from_video', 'scale', 'crop', 'alpha', 'orient', 'tile', 'compose', 'encode', 'capabilities']]),
     ('image_webp', ['fallback.webp.decode', 'fallback.webp.probe']),
+    ('system_audio', [f'{os_name}.audio.decode', f'{os_name}.audio.resample']),
 ]:
+    if pack == 'system_audio' and os_name not in ('windows', 'macos'):
+        continue
     if pack == 'image_webp' and os_name != 'windows':
         continue
     if pack == 'image' and os_name not in ('windows', 'macos'):

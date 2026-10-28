@@ -130,7 +130,7 @@ impl Demux {
                         Some(Channels::Positioned(p)) => p.bits(),
                         _ => 0,
                     };
-                    track.initialization = json!({"codec_id":p.codec.to_string(),"sample_rate":p.sample_rate,"channels":track.channels,"channel_mask":mask,"bits_per_sample":p.bits_per_sample,"bits_per_coded_sample":p.bits_per_coded_sample,"max_frames_per_packet":p.max_frames_per_packet,"frames_per_block":p.frames_per_block,"extra_data":p.extra_data.as_deref().unwrap_or(&[])});
+                    track.initialization = json!({"container":format.format_info().short_name,"delay_samples":t.delay,"padding_samples":t.padding,"start_ts":t.start_ts.get(),"num_frames":t.num_frames,"codec_id":p.codec.to_string(),"sample_rate":p.sample_rate,"channels":track.channels,"channel_mask":mask,"bits_per_sample":p.bits_per_sample,"bits_per_coded_sample":p.bits_per_coded_sample,"max_frames_per_packet":p.max_frames_per_packet,"frames_per_block":p.frames_per_block,"extra_data":p.extra_data.as_deref().unwrap_or(&[])});
                 }
                 CodecParameters::Video(p) => {
                     track.kind = "video".into();

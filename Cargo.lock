@@ -1126,6 +1126,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "remdia-backend-system-audio"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "libloading",
+ "remdia-graph",
+ "remdia-plugin-abi",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "remdia-backend-windows"
 version = "0.3.0"
 dependencies = [
