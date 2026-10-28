@@ -2,6 +2,17 @@
 
 **不依赖 FFmpeg 的模块化媒体框架。** Rust SDK 和 CLI 使用可组合的 demux / decoder / filter / encoder / mux / sink 插件图，支持 Windows Media Foundation 与 macOS VideoToolbox，供 replayer 共用同一套媒体图。
 
+0.3 开发版将图片纳入同一组件图及 C ABI 2.2。`MediaRequest::Image` 和显式 `GraphSpec` 共用执行器、资源预算、取消和缓冲所有权：Windows 使用 WIC，macOS 使用 ImageIO/CoreGraphics。`image` capability pack 提供 decode/probe/scale/crop/alpha/orient/tile/compose/encode 工厂。Windows 缺少 WIC WebP codec 时，SystemPreferred 可选用独立的 WebP 解码插件，后续缩放/编码仍走系统组件。该窄回退当前仅接受无 ICC/EXIF metadata 的 WebP；带这些信息的文件需要系统 codec。
+
+```sh
+remdia capabilities
+remdia image page.png --probe
+remdia image page.png --width 1200 --output preview.jpg
+remdia image page.png --width 1200 --plan
+```
+
+图片任务支持本地文件、共享编码字节和已有像素帧；显式图通过 `Engine::graph_with_inputs` 绑定 `core.buffer.source`。首批输出是有界 CPU RGBA8、straight alpha、sRGB；缩略图与音视频 seek 共用时间和 generation 语义。音频与容器的系统优先迁移仍在继续，见[整体方案](docs/system-media-and-image-design.md)。
+
 ## 架构
 
 ```text

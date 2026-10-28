@@ -6,7 +6,7 @@
 extern "C" {
 #endif
 #define REMDIA_ABI_MAJOR 2
-#define REMDIA_ABI_MINOR 1
+#define REMDIA_ABI_MINOR 2
 #define REMDIA_OK 0
 #define REMDIA_EOF 1
 #define REMDIA_NEED_INPUT 2

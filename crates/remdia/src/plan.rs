@@ -69,13 +69,34 @@ impl Plan {
                     edges.push(EdgeSpec::between(id, filter, None));
                 } else if request.task == Task::Thumbnail {
                     nodes.push(NodeSpec {
-                        id: "thumbnail".into(),
+                        id: "thumbnail_pixels".into(),
                         config: NodeConfig {
                             component: "native.video.rgba".into(),
-                            settings: json!({"max_dimension":600}),
+                            settings: json!({}),
                         },
                     });
-                    edges.push(EdgeSpec::between(id, "thumbnail", None));
+                    edges.push(EdgeSpec::between(id, "thumbnail_pixels", None));
+                    let platform = std::env::consts::OS;
+                    nodes.push(NodeSpec {
+                        id: "thumbnail_image".into(),
+                        config: NodeConfig {
+                            component: format!("{platform}.image.from_video"),
+                            settings: json!({}),
+                        },
+                    });
+                    nodes.push(NodeSpec {
+                        id: "thumbnail".into(),
+                        config: NodeConfig {
+                            component: format!("{platform}.image.scale"),
+                            settings: json!({"width":600,"height":600,"fit":true}),
+                        },
+                    });
+                    edges.push(EdgeSpec::between(
+                        "thumbnail_pixels",
+                        "thumbnail_image",
+                        None,
+                    ));
+                    edges.push(EdgeSpec::between("thumbnail_image", "thumbnail", None));
                 }
             }
         }

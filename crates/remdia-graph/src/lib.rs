@@ -110,6 +110,7 @@ pub unsafe extern "C" fn poll_cancellation(context: *mut c_void) -> u8 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DataKind {
+    Image,
     Packet,
     Audio,
     Video,
@@ -257,11 +258,20 @@ impl MediaBuffer {
         self.len() == 0
     }
     pub fn with_budget(self, reservation: Reservation) -> Self {
+        if self
+            .inner
+            ._reservation
+            .as_ref()
+            .is_some_and(|existing| existing.shares_budget_with(&reservation))
+        {
+            return self;
+        }
         let header = self.header.clone();
         Self::from_owner(header, Box::new(self), Some(reservation))
     }
     pub fn validate(&self) -> Result<()> {
         match &self.header.info {
+            FrameInfo::Image { image, .. } => image.validate(self.bytes())?,
             FrameInfo::Audio {
                 samples,
                 channels,

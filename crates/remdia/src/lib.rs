@@ -1,7 +1,10 @@
 //! FFmpeg-free modular media SDK; the playback facade runs the same public DAG.
+pub mod image;
+mod jobs;
 pub mod plan;
 pub mod registry;
 use anyhow::{Context, Result, ensure};
+pub use jobs::{JobPlan, JobSession, MediaRequest, ProviderPolicy};
 use registry::{Registry, TrustedFactory};
 pub use remdia_buffer::Budget;
 use remdia_buffer::Reservation;
@@ -39,6 +42,18 @@ pub struct Engine {
     budget: Budget,
 }
 impl Engine {
+    /// Bind caller-owned buffers to explicit core.buffer.source nodes. All
+    /// downstream nodes use the ordinary plugin factory and graph scheduler.
+    /// # Safety
+    /// Component libraries must be trusted and obey the negotiated plugin ABI.
+    pub unsafe fn graph_with_inputs(
+        &self,
+        spec: &GraphSpec,
+        inputs: std::collections::BTreeMap<String, Vec<MediaBuffer>>,
+        cancel: Cancellation,
+    ) -> Result<Graph> {
+        jobs::bound_graph(self, spec, inputs, cancel)
+    }
     pub fn discover(directory: impl AsRef<Path>, managed_budget_bytes: usize) -> Result<Self> {
         Ok(Self {
             registry: Registry::discover(directory)?,
@@ -261,11 +276,12 @@ impl Session {
                 GraphEvent::Output { mut buffer, .. } => {
                     match buffer.header.info.clone() {
                         FrameInfo::Packet { .. } => continue,
-                        FrameInfo::Video { pts_us, .. } => {
+                        FrameInfo::Video { pts_us, .. } | FrameInfo::Image { pts_us, .. } => {
                             if pts_us.is_some_and(|p| p - self.info.origin_us < self.target_us) {
                                 continue;
                             }
-                            if let FrameInfo::Video { pts_us, .. } = &mut buffer.header.info
+                            if let FrameInfo::Video { pts_us, .. } | FrameInfo::Image { pts_us, .. } =
+                                &mut buffer.header.info
                                 && let Some(p) = pts_us
                             {
                                 *p -= self.info.origin_us;

@@ -4,6 +4,8 @@ remdia's original SDK, graph runtime and CLI code are MIT licensed. There is no 
 
 Native capability packs incorporate these separately licensed libraries:
 
+- image-webp 0.2.4 (MIT OR Apache-2.0): https://github.com/image-rs/image-webp . Only the narrow Windows WebP fallback pack incorporates it; WIC is preferred when a WebP codec is installed. macOS image processing uses ImageIO. The fallback decoder is also compiled as a development-only test dependency to validate its buffer contract on other CI hosts.
+
 - Symphonia 0.6.1 (MPL-2.0): https://github.com/pdeljanov/Symphonia . Its Rust demuxers and audio decoders are compiled without modifications; exact source crates/checksums are recorded in Cargo.lock.
 - symphonia-adapter-libopus 0.3 (MIT OR Apache-2.0), with vendored libopus (BSD-3-Clause): https://github.com/aschey/symphonia-adapters and https://opus-codec.org/ . opusic-sys builds its matching vendored source using CMake.
 - rubato 0.16.2 (MIT): https://github.com/HEnquist/rubato . Stateful sinc resampling.

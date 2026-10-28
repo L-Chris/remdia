@@ -2,6 +2,8 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+mod image;
+pub use image::ImageInfo;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rational {
@@ -115,6 +117,11 @@ pub struct Plane {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FrameInfo {
+    Image {
+        image: ImageInfo,
+        #[serde(default)]
+        pts_us: Option<i64>,
+    },
     Packet {
         pts: i64,
         dts: i64,
@@ -159,7 +166,7 @@ pub enum FrameInfo {
 impl FrameInfo {
     pub fn pts_us(&self) -> Option<i64> {
         match self {
-            Self::Video { pts_us, .. } => *pts_us,
+            Self::Video { pts_us, .. } | Self::Image { pts_us, .. } => *pts_us,
             Self::Audio { pts_us, .. } => Some(*pts_us),
             _ => None,
         }

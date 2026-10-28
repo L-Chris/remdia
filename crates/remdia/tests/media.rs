@@ -328,7 +328,7 @@ fn video_packets_cross_dlls_to_platform_decoder_and_seek() {
         t.seek(1000000).unwrap();
         let f = t.read().unwrap().unwrap();
         assert!(
-            matches!(f.info(),FrameInfo::Video {format,width:160,height:90,..} if format=="rgba"),
+            matches!(f.info(),FrameInfo::Image {image,..} if image.width==160 && image.height==90 && image.format=="rgba8"),
             "{name}: {:?}",
             f.info()
         );

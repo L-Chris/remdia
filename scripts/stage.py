@@ -36,12 +36,18 @@ for pack, capabilities in [
     ('native', ['native.demux', 'native.audio.decode', 'native.audio.resample', 'native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.mp3.encode', 'native.packet.copy', 'native.mp3.mux', 'native.file.sink']),
     ('windows', ['windows.video.decode']),
     ('macos', ['macos.video.decode']),
+    ('image', [f'{os_name}.image.{op}' for op in ['decode', 'probe', 'from_video', 'scale', 'crop', 'alpha', 'orient', 'tile', 'compose', 'encode', 'capabilities']]),
+    ('image_webp', ['fallback.webp.decode', 'fallback.webp.probe']),
 ]:
+    if pack == 'image_webp' and os_name != 'windows':
+        continue
+    if pack == 'image' and os_name not in ('windows', 'macos'):
+        continue
     if pack in ('windows', 'macos') and pack != os_name:
         continue
     library = {'windows': f'remdia_backend_{pack}.dll', 'macos': f'libremdia_backend_{pack}.dylib', 'linux': f'libremdia_backend_{pack}.so'}[os_name]
     copy_binary(build / library, plugins / library)
-    (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, abi_minor=1, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
+    (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, abi_minor=2, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
 # Reject stale compatibility manifests when staging over an older build.
 for old in plugins.glob('*ffmpeg*'):
     old.unlink()

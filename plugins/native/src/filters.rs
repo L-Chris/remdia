@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use remdia_graph::*;
 use rubato::{
     Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -396,38 +396,20 @@ impl Component for Resample {
 }
 pub struct Rgba {
     info: NodeInfo,
-    maximum: u32,
     pending: Option<MediaBuffer>,
     draining: bool,
 }
 impl Rgba {
-    pub fn new(c: &NodeConfig) -> Result<Self> {
-        let maximum = c
-            .settings
-            .get("max_dimension")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(600) as u32;
-        ensure!((1..=8192).contains(&maximum), "invalid image scale");
-        let maximum_bytes = (maximum as usize * maximum as usize * 4).min(128 * 1024 * 1024);
-        let mut info = info(DataKind::Video, DataKind::Video, maximum_bytes);
+    pub fn new(_c: &NodeConfig) -> Result<Self> {
+        let mut info = info(DataKind::Video, DataKind::Video, 1);
         info.output.format = Some("rgba".into());
         Ok(Self {
             info,
-            maximum,
             pending: None,
             draining: false,
         })
     }
-}
-impl Component for Rgba {
-    fn info(&self) -> &NodeInfo {
-        &self.info
-    }
-    fn submit(&mut self, b: &MediaBuffer) -> Result<Submit> {
-        if self.pending.is_some() {
-            return Ok(Submit::WouldBlock);
-        }
-        ensure!(!self.draining, "submit after scaler drain");
+    fn convert(b: &MediaBuffer) -> Result<MediaBuffer> {
         b.validate()?;
         let FrameInfo::Video {
             width,
@@ -445,6 +427,22 @@ impl Component for Rgba {
             (*width as u64) * (*height as u64) <= 33_554_432,
             "image exceeds pixel limit"
         );
+        ensure!(
+            planes.len() == if format == "nv12" { 2 } else { 1 },
+            "invalid video plane count"
+        );
+        ensure!(
+            planes[0].rows >= *height as usize
+                && planes[0].stride >= *width as usize * if format == "nv12" { 1 } else { 4 },
+            "invalid video stride"
+        );
+        if format == "nv12" {
+            ensure!(
+                planes[1].rows >= height.div_ceil(2) as usize
+                    && planes[1].stride >= width.div_ceil(2) as usize * 2,
+                "invalid chroma stride"
+            );
+        }
         let mut rgba = vec![0u8; *width as usize * *height as usize * 4];
         for y in 0..*height as usize {
             for x in 0..*width as usize {
@@ -488,43 +486,51 @@ impl Component for Rgba {
                 }
             }
         }
-        let image =
-            image::RgbaImage::from_raw(*width, *height, rgba).context("invalid RGBA image")?;
-        let scale = (self.maximum as f64 / (*width).max(1) as f64)
-            .min(self.maximum as f64 / (*height).max(1) as f64)
-            .min(1.);
-        let w = (*width as f64 * scale).round().max(1.) as u32;
-        let h = (*height as f64 * scale).round().max(1.) as u32;
-        let bytes = if w == *width && h == *height {
-            image.into_raw()
-        } else {
-            image::imageops::resize(&image, w, h, image::imageops::FilterType::Triangle).into_raw()
-        };
         let mut header = b.header.clone();
-        if let FrameInfo::Video {
-            width,
-            height,
-            format,
-            planes,
-            ..
-        } = &mut header.info
-        {
-            *width = w;
-            *height = h;
+        if let FrameInfo::Video { format, planes, .. } = &mut header.info {
             *format = "rgba".into();
             *planes = vec![Plane {
-                stride: w as usize * 4,
-                rows: h as usize,
+                stride: *width as usize * 4,
+                rows: *height as usize,
             }];
         }
-        self.pending = Some(MediaBuffer::new(header, vec![bytes]));
+        Ok(MediaBuffer::new(header, vec![rgba]))
+    }
+}
+impl Component for Rgba {
+    fn info(&self) -> &NodeInfo {
+        &self.info
+    }
+    fn submit(&mut self, b: &MediaBuffer) -> Result<Submit> {
+        ensure!(!self.draining, "submit after conversion drain");
+        if self.pending.is_some() {
+            return Ok(Submit::WouldBlock);
+        }
+        b.validate()?;
+        self.pending = Some(b.clone());
         Ok(Submit::Accepted)
     }
     fn receive(&mut self) -> Result<Receive> {
-        Ok(match self.pending.take() {
-            Some(b) => Receive::Output(b),
-            None if self.draining => Receive::End,
-            None => Receive::NeedInput,
+        if let Some(b) = &self.pending {
+            let FrameInfo::Video { width, height, .. } = &b.header.info else {
+                anyhow::bail!("expected video")
+            };
+            ensure!(
+                u64::from(*width) * u64::from(*height) <= 33_554_432,
+                "image exceeds pixel limit"
+            );
+            let bound = *width as usize * *height as usize * 4;
+            if bound != self.info.max_output_bytes {
+                self.info.max_output_bytes = bound;
+                return Ok(Receive::Reconfigured);
+            }
+            let input = self.pending.take().unwrap();
+            return Ok(Receive::Output(Self::convert(&input)?));
+        }
+        Ok(if self.draining {
+            Receive::End
+        } else {
+            Receive::NeedInput
         })
     }
     fn drain(&mut self) -> Result<()> {

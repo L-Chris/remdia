@@ -61,6 +61,9 @@ impl Budget {
     }
 }
 impl Reservation {
+    pub fn shares_budget_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.budget.0, &other.budget.0)
+    }
     pub fn shrink(&mut self, bytes: usize) {
         assert!(bytes <= self.bytes);
         self.budget
