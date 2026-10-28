@@ -234,6 +234,19 @@ fn video_packets_cross_dlls_to_windows_decoder_and_seek() {
                 .iter()
                 .any(|n| n.config.component == "windows.video.decode")
         );
+        let decoder = s
+            .plan()
+            .graph
+            .nodes
+            .iter()
+            .find(|n| n.config.component == "windows.video.decode")
+            .unwrap();
+        let graph = unsafe { e.graph(&s.plan().graph, Cancellation::default()) }.unwrap();
+        assert!(
+            graph.node_info(&decoder.id).unwrap().max_output_bytes < 1024 * 1024,
+            "output reservation must follow the negotiated surface dimensions"
+        );
+        drop(graph);
         let mut video = 0;
         let mut retained = None;
         while let Some(f) = s.read().unwrap() {

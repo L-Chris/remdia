@@ -53,6 +53,19 @@ fn reject_traversal_oversize_and_old_abi() {
             .candidates
             .is_empty()
     );
+    for (major, minor) in [(1, 0), (2, u16::MAX)] {
+        let value = json!({"id":"test", "abi_major":major, "abi_minor":minor,
+            "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
+            "library":"other.dll", "capabilities":["native.demux"]});
+        std::fs::write(dir.0.join("test.json"), serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(
+            Engine::discover(&dir.0, 256 * 1024 * 1024)
+                .unwrap()
+                .registry()
+                .candidates
+                .is_empty()
+        );
+    }
     std::fs::write(dir.0.join("test.json"), vec![b' '; 65537]).unwrap();
     assert!(Engine::discover(&dir.0, 256 * 1024 * 1024).is_err());
 }

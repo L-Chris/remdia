@@ -56,6 +56,7 @@ pub struct Decoder {
     height: u32,
     stride: usize,
     display: DisplayArea,
+    allocation_limit: usize,
     nal_length: usize,
     headers: Vec<u8>,
     inject: bool,
@@ -321,6 +322,7 @@ impl Decoder {
                 height: 0,
                 stride: 0,
                 display: DisplayArea::default(),
+                allocation_limit: maximum,
                 nal_length,
                 headers,
                 inject: true,
@@ -358,10 +360,14 @@ impl Decoder {
                 .stride
                 .checked_mul(self.height as usize + self.height.div_ceil(2) as usize)
                 .context("video allocation overflow")?;
+            let allocation = size.max(self.transform.GetOutputStreamInfo(0)?.cbSize as usize);
             ensure!(
-                size <= self.info.max_output_bytes,
+                allocation <= self.allocation_limit,
                 "video frame exceeds budget"
             );
+            // Advertise the negotiated surface bound, rather than the request's
+            // safety ceiling, so ordinary 4K queues can use their byte budget.
+            self.info.max_output_bytes = allocation;
             Ok(())
         }
     }
@@ -514,7 +520,8 @@ impl Component for Decoder {
                         drop(sample);
                         select_output(&self.transform)?;
                         self.refresh_format()?;
-                        continue;
+                        // Let the graph reserve the new bound before copying a frame.
+                        return Ok(Receive::Reconfigured);
                     }
                     Err(e) => return Err(e).context("Windows video ProcessOutput"),
                     Ok(()) => {}

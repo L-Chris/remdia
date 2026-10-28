@@ -13,7 +13,7 @@ file / HTTP → demux → audio decoder → gain → resample → WAV mux → fi
                   └→ compressed packet copy → MP3 mux → file sink
 ```
 
-组件通过稳定平台 C ABI v2 独立注册和创建。一个图中的节点可以来自不同 DLL；只有输入/输出类型、格式、采样率等约束兼容的连接才允许执行。运行时校验 DAG、逐轨路由、下游优先调度、有界边队列、EOF 排空和 seek generation。没有隐藏的 FFmpeg 回退。
+组件通过稳定平台 C ABI v2.1 独立注册和创建。一个图中的节点可以来自不同 DLL；只有输入/输出类型、格式、采样率等约束兼容的连接才允许执行。运行时校验 DAG、逐轨路由、下游优先调度、有界边队列、EOF 排空和 seek generation。没有隐藏的 FFmpeg 回退。
 
 | 能力包 | 独立组件 |
 | --- | --- |
@@ -63,7 +63,7 @@ while let Some(frame) = session.read()? {
 # Ok(()) }
 ```
 
-SDK Session、图和组件留在创建它们的工作线程；只读帧与取消 token 可跨线程。每个节点使用 submit/receive 分离协议，WOULD_BLOCK 不消费输入。宿主以 retain/release 显式传递输入引用，跨 DLL 不传 Rust allocator 对象。
+SDK Session、图和组件留在创建它们的工作线程；只读帧与取消 token 可跨线程。每个节点使用 submit/receive 分离协议；RECONFIGURED 显式通知端口与输出预算变化，宿主复验连接后再获取新格式帧。WOULD_BLOCK 不消费输入。宿主以 retain/release 显式传递输入引用，跨 DLL 不传 Rust allocator 对象。
 
 受管理预算覆盖图输出及边队列持有的缓冲、分段 PCM；队列还分别限制数量和媒体时长。预留不足时不会消费输入。跨组件包装可能保守重复计入共享数据，且编解码器内部、系统驱动、临时导出等不属于整个进程 RSS 的硬上限。没有相对 FFmpeg 的性能或包体收益承诺。
 

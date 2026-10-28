@@ -310,6 +310,8 @@ impl PlaneOwner for MediaBuffer {
 pub enum Receive {
     Output(MediaBuffer),
     NeedInput,
+    /// info() changed; no media buffer was returned. Reserve the new bound next.
+    Reconfigured,
     End,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

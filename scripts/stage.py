@@ -37,7 +37,7 @@ for pack, capabilities in [
         continue
     library = {'windows': f'remdia_backend_{pack}.dll', 'macos': f'libremdia_backend_{pack}.dylib', 'linux': f'libremdia_backend_{pack}.so'}[os_name]
     copy_binary(build / library, plugins / library)
-    (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
+    (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, abi_minor=1, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
 # Reject stale compatibility manifests when staging over an older build.
 for old in plugins.glob('*ffmpeg*'):
     old.unlink()

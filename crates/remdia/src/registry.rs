@@ -15,6 +15,8 @@ use std::{
 pub struct Manifest {
     pub id: String,
     pub abi_major: u16,
+    #[serde(default)]
+    pub abi_minor: u16,
     pub os: String,
     pub arch: String,
     pub library: String,
@@ -47,6 +49,7 @@ impl Registry {
             let manifest: Manifest = serde_json::from_slice(&bytes)
                 .with_context(|| format!("manifest {}", path.display()))?;
             if manifest.abi_major != abi::ABI_MAJOR
+                || manifest.abi_minor > abi::ABI_MINOR
                 || manifest.os != std::env::consts::OS
                 || manifest.arch != std::env::consts::ARCH
             {
@@ -181,6 +184,7 @@ impl Candidate {
         let api = unsafe { table.assume_init() };
         ensure!(
             api.header.major == abi::ABI_MAJOR
+                && api.header.minor <= abi::ABI_MINOR
                 && api.header.struct_size >= std::mem::size_of::<abi::PluginApi>() as u32,
             "incompatible function table"
         );
@@ -299,6 +303,10 @@ impl Component for DynamicComponent {
             abi::OK => Ok(Receive::Output(out.buffer()?)),
             abi::EOF => Ok(Receive::End),
             abi::NEED_INPUT => Ok(Receive::NeedInput),
+            abi::RECONFIGURED => {
+                self.info = Some(serde_json::from_slice(out.json()?)?);
+                Ok(Receive::Reconfigured)
+            }
             _ => anyhow::bail!("invalid receive status"),
         }
     }

@@ -408,7 +408,8 @@ impl Rgba {
             .and_then(|v| v.as_u64())
             .unwrap_or(600) as u32;
         ensure!((1..=8192).contains(&maximum), "invalid image scale");
-        let mut info = info(DataKind::Video, DataKind::Video, 128 * 1024 * 1024);
+        let maximum_bytes = (maximum as usize * maximum as usize * 4).min(128 * 1024 * 1024);
+        let mut info = info(DataKind::Video, DataKind::Video, maximum_bytes);
         info.output.format = Some("rgba".into());
         Ok(Self {
             info,

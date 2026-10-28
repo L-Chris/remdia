@@ -6,10 +6,15 @@
 extern "C" {
 #endif
 #define REMDIA_ABI_MAJOR 2
+#define REMDIA_ABI_MINOR 1
 #define REMDIA_OK 0
 #define REMDIA_EOF 1
+#define REMDIA_NEED_INPUT 2
+#define REMDIA_WOULD_BLOCK 3
+#define REMDIA_RECONFIGURED 4
 #define REMDIA_ERROR (-1)
 #define REMDIA_PANIC (-2)
+#define REMDIA_INTERRUPTED (-3)
 typedef struct { uint32_t struct_size; uint16_t major, minor; } RemdiaHeader;
 typedef struct { const uint8_t *ptr; size_t len; } RemdiaView;
 typedef struct { void *context; uint8_t (*cancelled)(void *); } RemdiaControl;

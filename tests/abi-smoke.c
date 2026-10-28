@@ -32,6 +32,8 @@ int main(int argc, char **argv) {
     header.struct_size = 8;
     assert(query(header, &api) == REMDIA_ERROR);
     header.struct_size = sizeof(api);
+    assert(query(header, &api) == REMDIA_ERROR); /* old host minor */
+    header.minor = REMDIA_ABI_MINOR;
     assert(query(header, &api) == REMDIA_OK);
     assert(api.header.major == REMDIA_ABI_MAJOR);
     assert(api.header.struct_size == sizeof(api));

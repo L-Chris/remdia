@@ -182,3 +182,100 @@ fn bounded_edges_do_not_lose_inputs_and_drain_after_the_last_buffer() {
     drop(held);
     assert_eq!(budget.used(), 0);
 }
+
+struct ChangingSource {
+    info: NodeInfo,
+    state: u8,
+    incompatible: bool,
+}
+impl Component for ChangingSource {
+    fn info(&self) -> &NodeInfo {
+        &self.info
+    }
+    fn receive(&mut self) -> anyhow::Result<Receive> {
+        self.state += 1;
+        Ok(match self.state {
+            1 => {
+                self.info.max_output_bytes = 8;
+                if self.incompatible {
+                    self.info.output.kind = DataKind::Video;
+                }
+                Receive::Reconfigured
+            }
+            2 => Receive::Output(MediaBuffer::new(
+                BufferHeader {
+                    stream_id: 0,
+                    generation: 1,
+                    info: FrameInfo::Bytes {
+                        format: "test".into(),
+                        offset: None,
+                    },
+                },
+                vec![vec![42; 8]],
+            )),
+            _ => Receive::End,
+        })
+    }
+    fn drain(&mut self) -> anyhow::Result<()> {
+        panic!("source must not be drained on reconfiguration")
+    }
+    fn reset(&mut self, _g: u64, _t: i64) -> anyhow::Result<()> {
+        self.state = 0;
+        Ok(())
+    }
+}
+fn changing_source(incompatible: bool) -> Box<dyn Component> {
+    Box::new(ChangingSource {
+        info: NodeInfo {
+            input: None,
+            output: PortCaps::new(DataKind::Bytes),
+            max_output_bytes: 4,
+            media: None,
+        },
+        state: 0,
+        incompatible,
+    })
+}
+#[test]
+fn format_change_reserves_the_new_bound_and_revalidates_connected_ports() {
+    let mut graph = Graph::from_instances(
+        vec![("source".into(), changing_source(false))],
+        &[],
+        Budget::new(8),
+        Cancellation::default(),
+    )
+    .unwrap();
+    assert!(matches!(graph.poll().unwrap(), GraphEvent::Pending));
+    assert_eq!(graph.node_info("source").unwrap().max_output_bytes, 8);
+    let mut output = None;
+    for _ in 0..8 {
+        if let GraphEvent::Output { buffer, .. } = graph.poll().unwrap() {
+            output = Some(buffer);
+            break;
+        }
+    }
+    assert_eq!(output.unwrap().bytes(), &[42; 8]);
+    let trace = Arc::new(Mutex::new(Vec::new()));
+    let mut graph = Graph::from_instances(
+        vec![
+            ("source".into(), changing_source(true)),
+            (
+                "filter".into(),
+                node(Some(DataKind::Bytes), DataKind::Bytes, trace.clone()),
+            ),
+        ],
+        &[EdgeSpec::between("source", "filter", None)],
+        Budget::new(32),
+        Cancellation::default(),
+    )
+    .unwrap();
+    assert!(
+        graph
+            .poll()
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("reconfigured output is incompatible")
+    );
+    assert!(trace.lock().unwrap().is_empty());
+}

@@ -177,6 +177,9 @@ unsafe extern "C" fn receive(handle: *mut c_void, out: *mut Output) -> i32 {
         match h.component.receive()? {
             Receive::Output(b) => Ok((abi::OK, Some(Owned::buffer(b)?))),
             Receive::NeedInput => Ok((abi::NEED_INPUT, None)),
+            Receive::Reconfigured => {
+                Ok((abi::RECONFIGURED, Some(Owned::json(h.component.info())?)))
+            }
             Receive::End => Ok((abi::EOF, None)),
         }
     })
@@ -228,6 +231,7 @@ pub unsafe fn query(
 ) -> i32 {
     if out.is_null()
         || host.major != abi::ABI_MAJOR
+        || host.minor < abi::ABI_MINOR
         || host.struct_size < std::mem::size_of::<PluginApi>() as u32
     {
         return abi::ERROR;

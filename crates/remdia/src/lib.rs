@@ -189,6 +189,7 @@ fn encode_pcm_mp3(
                 output[offset..end].copy_from_slice(b.bytes());
             }
             Receive::End => break,
+            Receive::Reconfigured => anyhow::bail!("MP3 encoder changed its output contract"),
             Receive::NeedInput => anyhow::bail!("MP3 encoder requested input after drain"),
         }
     }

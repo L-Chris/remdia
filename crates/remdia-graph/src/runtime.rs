@@ -243,6 +243,36 @@ impl Graph {
         self.generation = generation;
         Ok(generation)
     }
+    fn validate_live_ports(&self, i: usize) -> Result<()> {
+        let n = &self.nodes[i];
+        let info = n.component.info();
+        for &e in &n.incoming {
+            let parent = &self.nodes[self.edges[e].from];
+            ensure!(
+                info.input
+                    .as_ref()
+                    .is_some_and(|p| p.accepts(&parent.component.info().output)),
+                "reconfigured input is incompatible: {} -> {}",
+                parent.id,
+                n.id
+            );
+        }
+        for &e in &n.outgoing {
+            let child = &self.nodes[self.edges[e].to];
+            ensure!(
+                child
+                    .component
+                    .info()
+                    .input
+                    .as_ref()
+                    .is_some_and(|p| p.accepts(&info.output)),
+                "reconfigured output is incompatible: {} -> {}",
+                n.id,
+                child.id
+            );
+        }
+        Ok(())
+    }
     /// One bounded scheduling pass. External consumers decide when to pull again.
     pub fn poll(&mut self) -> Result<GraphEvent> {
         ensure!(!self.cancel.is_cancelled(), "cancelled");
@@ -332,6 +362,16 @@ impl Graph {
                 Receive::End => {
                     n.ended = true;
                     progress = true;
+                    continue;
+                }
+                Receive::Reconfigured => {
+                    ensure!(
+                        n.component.info().max_output_bytes <= self.budget.limit(),
+                        "reconfigured node {} exceeds managed budget",
+                        n.id
+                    );
+                    progress = true;
+                    self.validate_live_ports(i)?;
                     continue;
                 }
                 Receive::NeedInput => {}
