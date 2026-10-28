@@ -8,6 +8,7 @@ try {
     if ($Release) { $buildArgs += '--release' }
     & cargo @buildArgs
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    if (Test-Path 'dist/remdia') { Remove-Item 'dist/remdia' -Recurse -Force }
     python scripts/stage.py --profile $profile
     if ($LASTEXITCODE -ne 0) { throw 'Stage failed.' }
     # All codec libraries are compiled into capability packs. No FFmpeg DLLs.

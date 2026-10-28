@@ -24,6 +24,8 @@ struct CancelState {
     serial: AtomicU64,
     observed: AtomicU64,
     external: Option<Arc<AtomicBool>>,
+    requested: Option<Arc<AtomicU64>>,
+    active_generation: AtomicU64,
 }
 impl Cancellation {
     pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
@@ -31,6 +33,17 @@ impl Cancellation {
             external: Some(flag),
             ..Default::default()
         }))
+    }
+    pub fn with_requested_generation(requested: Arc<AtomicU64>) -> Self {
+        Self(Arc::new(CancelState {
+            requested: Some(requested),
+            ..Default::default()
+        }))
+    }
+    pub fn acknowledge_generation(&self, generation: u64) {
+        self.0
+            .active_generation
+            .store(generation, Ordering::Release);
     }
     pub fn cancel(&self) {
         self.0.cancel.store(true, Ordering::Release);
@@ -54,7 +67,12 @@ impl Cancellation {
     pub fn poll(&self) -> u8 {
         if self.is_cancelled() {
             1
-        } else if self.0.serial.load(Ordering::Acquire) != self.0.observed.load(Ordering::Acquire) {
+        } else if self.0.requested.as_ref().is_some_and(|requested| {
+            let active = self.0.active_generation.load(Ordering::Acquire);
+            active > 0 && requested.load(Ordering::Acquire) > active
+        }) || self.0.serial.load(Ordering::Acquire)
+            != self.0.observed.load(Ordering::Acquire)
+        {
             2
         } else {
             0

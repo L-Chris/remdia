@@ -11,7 +11,7 @@ struct Local {
     control: Control,
 }
 fn interrupted(error: anyhow::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Interrupted, error.to_string())
+    io::Error::other(error.to_string())
 }
 impl Read for Local {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {

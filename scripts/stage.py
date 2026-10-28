@@ -4,6 +4,7 @@ import argparse
 import json
 import platform
 import shutil
+import subprocess
 from pathlib import Path
 
 p = argparse.ArgumentParser()
@@ -46,3 +47,5 @@ for name in ['README.md', 'LICENSE', 'THIRD_PARTY.md']:
 print(out)
 
 shutil.copytree(root / "licenses", out / "licenses", dirs_exist_ok=True)
+
+(out / "REVISION").write_text(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip() + "\n")

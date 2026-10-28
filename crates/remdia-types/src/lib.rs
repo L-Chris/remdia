@@ -122,7 +122,7 @@ pub enum FrameInfo {
         time_base: Rational,
         trim_start: u64,
         trim_end: u64,
-        keyframe: bool,
+        keyframe: Option<bool>,
     },
     Bytes {
         format: String,

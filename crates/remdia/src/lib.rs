@@ -115,6 +115,7 @@ impl Engine {
             request,
             cancel,
             target_us: 0,
+            at_end: false,
             budget: self.budget.clone(),
             registry_dir: self
                 .registry
@@ -205,6 +206,7 @@ pub struct Session {
     request: Request,
     cancel: Cancellation,
     target_us: i64,
+    at_end: bool,
     budget: Budget,
     registry_dir: std::path::PathBuf,
 }
@@ -222,8 +224,19 @@ impl Session {
         self.graph.generation()
     }
     pub fn seek(&mut self, target_us: i64) -> Result<u64> {
-        let generation = self.graph.reset(target_us)?;
+        ensure!(target_us >= 0, "negative seek");
+        let at_end = self
+            .info
+            .duration_us
+            .is_some_and(|d| d > 0 && target_us >= d);
+        let seek_to = if at_end {
+            self.info.duration_us.unwrap().saturating_sub(1)
+        } else {
+            target_us
+        };
+        let generation = self.graph.reset(seek_to)?;
         self.target_us = target_us;
+        self.at_end = at_end;
         Ok(generation)
     }
     pub fn read(&mut self) -> Result<Option<Frame>> {
@@ -232,6 +245,9 @@ impl Session {
             "probe session does not decode"
         );
         self.cancel.begin();
+        if self.at_end {
+            return Ok(None);
+        }
         let started = Instant::now();
         loop {
             ensure!(

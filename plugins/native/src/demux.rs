@@ -20,6 +20,9 @@ pub struct Demux {
     request: Request,
     generation: u64,
     ended: bool,
+    keyframe_gate: Option<u32>,
+    keys: BTreeMap<u32, Vec<(i64, i64)>>,
+    scanned: BTreeMap<u32, i64>,
 }
 fn codec_name(id: AudioCodecId) -> String {
     codec_registry()
@@ -161,9 +164,165 @@ impl Demux {
             request,
             generation: 1,
             ended: false,
+            keyframe_gate: None,
+            keys: BTreeMap::new(),
+            scanned: BTreeMap::new(),
         })
     }
 }
+impl Demux {
+    fn reopen(&mut self) -> Result<()> {
+        let source = super::source::open(&self.request, self.control)?;
+        self.format = symphonia::default::get_probe().probe(
+            &Hint::new(),
+            MediaSourceStream::new(source, Default::default()),
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )?;
+        Ok(())
+    }
+    fn seek_at(&mut self, track: u32, time: i64) -> Result<()> {
+        // Recreate the reader before random access. In Symphonia 0.6 MP4,
+        // reaching EOF consumes the pending atom needed by subsequent reads.
+        self.reopen()?;
+        if self
+            .format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time: Time::from_micros(time.max(0)),
+                    track_id: Some(track),
+                },
+            )
+            .is_err()
+        {
+            self.reopen()?;
+        }
+        Ok(())
+    }
+    fn seek_video(&mut self, id: u32, target: i64) -> Result<()> {
+        let track = self
+            .info
+            .media
+            .as_ref()
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.index == id as usize)
+            .context("unknown seek track")?
+            .clone();
+        // Symphonia's experimental video seek locates a timestamp, not a sync
+        // sample. Find a preceding random-access point without decoding frames.
+        if self.scanned.get(&id).is_some_and(|p| *p >= target)
+            && let Some((_, dts)) = self
+                .keys
+                .get(&id)
+                .and_then(|v| v.iter().rev().find(|p| p.0 <= target))
+                .copied()
+        {
+            return self.seek_at(id, dts.saturating_sub(1));
+        }
+        if !matches!(track.codec.as_str(), "h264" | "hevc") {
+            // No reliable random-access parser: correctness requires pre-roll
+            // from the beginning, rather than skipping silently to a later GOP.
+            return self.reopen();
+        }
+        let started = std::time::Instant::now();
+        let mut window = 4_000_000i64;
+        loop {
+            self.control.check()?;
+            ensure!(
+                started.elapsed().as_millis() < self.request.timeout_ms as u128,
+                "keyframe pre-roll search timed out"
+            );
+            let start = target.saturating_sub(window).max(0);
+            self.seek_at(id, start)?;
+            let mut candidate = None;
+            for _ in 0..100000 {
+                self.control.check()?;
+                let result = self.format.next_packet();
+                self.control.check()?;
+                let Some(packet) = result? else { break };
+                ensure!(
+                    packet.data.len() <= self.request.max_packet_bytes,
+                    "seek packet exceeds budget"
+                );
+                if packet.track_id != id {
+                    continue;
+                }
+                let pts = track
+                    .time_base
+                    .rescale(packet.pts.get(), Rational::MICROS)?;
+                if packet_keyframe(&track, &packet.data) == Some(true) && pts <= target {
+                    let dts = track
+                        .time_base
+                        .rescale(packet.dts.get(), Rational::MICROS)?;
+                    candidate = Some(dts);
+                }
+                if pts > target {
+                    break;
+                }
+            }
+            if let Some(dts) = candidate {
+                return self.seek_at(id, dts.saturating_sub(1));
+            }
+            if start == 0 {
+                return self.reopen();
+            }
+            window = window.saturating_mul(2);
+        }
+    }
+}
+fn packet_keyframe(track: &Track, data: &[u8]) -> Option<bool> {
+    if track.kind != "video" {
+        return Some(true);
+    }
+    if !matches!(track.codec.as_str(), "h264" | "hevc") {
+        return None;
+    }
+    let config = track
+        .initialization
+        .get("extra_data")
+        .and_then(|v| v.as_array())
+        .and_then(|v| v.first())
+        .and_then(|v| v.as_array());
+    let length = config
+        .and_then(|v| v.get(if track.codec == "h264" { 4 } else { 21 }))
+        .and_then(|v| v.as_u64())
+        .map(|n| (n as usize & 3) + 1);
+    let key = |nal: u8| {
+        if track.codec == "h264" {
+            nal & 31 == 5
+        } else {
+            (16..=21).contains(&((nal >> 1) & 63))
+        }
+    };
+    if let Some(length) = length {
+        let mut at = 0;
+        while at < data.len() {
+            let prefix = data.get(at..at.checked_add(length)?)?;
+            let len = prefix.iter().fold(0usize, |n, &b| (n << 8) | b as usize);
+            at += length;
+            let nal = data.get(at..at.checked_add(len)?)?;
+            if nal.first().is_some_and(|b| key(*b)) {
+                return Some(true);
+            }
+            at += len;
+        }
+        Some(false)
+    } else {
+        for i in 0..data.len().saturating_sub(4) {
+            if data[i..].starts_with(&[0, 0, 1]) && key(data[i + 3]) {
+                return Some(true);
+            }
+            if data[i..].starts_with(&[0, 0, 0, 1]) && key(data[i + 4]) {
+                return Some(true);
+            }
+        }
+        Some(false)
+    }
+}
+
 impl Component for Demux {
     fn info(&self) -> &NodeInfo {
         &self.info
@@ -173,42 +332,72 @@ impl Component for Demux {
         if self.ended {
             return Ok(Receive::End);
         }
-        let result = self.format.next_packet();
-        self.control.check()?;
-        let Some(packet) = result? else {
-            self.ended = true;
-            return Ok(Receive::End);
-        };
-        ensure!(
-            packet.data.len() <= self.request.max_packet_bytes,
-            "packet exceeds byte budget"
-        );
-        let track = self
-            .info
-            .media
-            .as_ref()
-            .unwrap()
-            .tracks
-            .iter()
-            .find(|t| t.index == packet.track_id as usize)
-            .context("packet has unknown track")?;
-        let header = BufferHeader {
-            stream_id: packet.track_id,
-            generation: self.generation,
-            info: FrameInfo::Packet {
-                pts: packet.pts.get(),
-                dts: packet.dts.get(),
-                duration: packet.dur.get(),
-                time_base: track.time_base,
-                trim_start: packet.trim_start.get(),
-                trim_end: packet.trim_end.get(),
-                keyframe: false,
-            },
-        };
-        Ok(Receive::Output(MediaBuffer::new(
-            header,
-            vec![packet.data.into_vec()],
-        )))
+        loop {
+            let result = self.format.next_packet();
+            self.control.check()?;
+            let Some(packet) = result? else {
+                self.ended = true;
+                return Ok(Receive::End);
+            };
+            ensure!(
+                packet.data.len() <= self.request.max_packet_bytes,
+                "packet exceeds byte budget"
+            );
+            let track = self
+                .info
+                .media
+                .as_ref()
+                .unwrap()
+                .tracks
+                .iter()
+                .find(|t| t.index == packet.track_id as usize)
+                .context("packet has unknown track")?;
+            let keyframe = packet_keyframe(track, &packet.data);
+            if self.keyframe_gate == Some(packet.track_id) {
+                if keyframe != Some(true) {
+                    continue;
+                }
+                self.keyframe_gate = None;
+            }
+
+            if track.kind == "video" {
+                let pts = track
+                    .time_base
+                    .rescale(packet.pts.get(), Rational::MICROS)?;
+                self.scanned
+                    .entry(packet.track_id)
+                    .and_modify(|p| *p = (*p).max(pts))
+                    .or_insert(pts);
+                if keyframe == Some(true) {
+                    let dts = track
+                        .time_base
+                        .rescale(packet.dts.get(), Rational::MICROS)?;
+                    let keys = self.keys.entry(packet.track_id).or_default();
+                    if !keys.iter().any(|p| p.0 == pts) {
+                        ensure!(keys.len() < 100000, "keyframe index exceeds limit");
+                        keys.push((pts, dts));
+                        keys.sort_unstable();
+                    }
+                }
+            }
+            let header = BufferHeader {
+                stream_id: packet.track_id,
+                generation: self.generation,
+                info: FrameInfo::Packet {
+                    pts: packet.pts.get(),
+                    dts: packet.dts.get(),
+                    duration: packet.dur.get(),
+                    time_base: track.time_base,
+                    trim_start: packet.trim_start.get(),
+                    trim_end: packet.trim_end.get(),
+                    keyframe,
+                },
+            };
+            return Ok(Receive::Output(MediaBuffer::new(
+                header,
+                vec![packet.data.into_vec()],
+            )));
+        }
     }
     fn drain(&mut self) -> Result<()> {
         self.ended = true;
@@ -224,13 +413,32 @@ impl Component for Demux {
             TrackType::Audio
         };
         let track_id = self.format.default_track(kind).map(|t| t.id);
-        self.format.seek(
-            SeekMode::Accurate,
-            SeekTo::Time {
-                time: Time::from_micros(target),
-                track_id,
-            },
-        )?;
+        if kind == TrackType::Video && target > 0 {
+            self.seek_video(track_id.context("no video track")?, target)?;
+        } else {
+            self.reopen()?;
+            if self
+                .format
+                .seek(
+                    SeekMode::Accurate,
+                    SeekTo::Time {
+                        time: Time::from_micros(target),
+                        track_id,
+                    },
+                )
+                .is_err()
+            {
+                self.reopen()?;
+            }
+        }
+        self.keyframe_gate = if kind == TrackType::Video
+            && self.info.media.as_ref().unwrap().tracks.iter().any(|t| {
+                Some(t.index as u32) == track_id && matches!(t.codec.as_str(), "h264" | "hevc")
+            }) {
+            track_id
+        } else {
+            None
+        };
         self.generation = generation;
         self.ended = false;
         Ok(())

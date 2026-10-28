@@ -263,3 +263,146 @@ fn video_packets_cross_dlls_to_windows_decoder_and_seek() {
         );
     }
 }
+
+#[test]
+#[ignore = "requires staged native demux component and fixtures"]
+fn compressed_video_seek_restores_a_preceding_random_access_packet_after_eof() {
+    let e = engine();
+    for source in ["av.mp4", "av.mkv"] {
+        let mut request = Request::playback(fixture(source));
+        request.task = Task::Probe;
+        let spec = GraphSpec {
+            nodes: vec![NodeSpec {
+                id: "demux".into(),
+                config: NodeConfig {
+                    component: "native.demux".into(),
+                    settings: serde_json::to_value(request).unwrap(),
+                },
+            }],
+            edges: vec![],
+        };
+        let mut g = unsafe { e.graph(&spec, Cancellation::default()) }.unwrap();
+        let mut count = 0;
+        let start = Instant::now();
+        loop {
+            match g.poll().unwrap() {
+                GraphEvent::End => break,
+                GraphEvent::Pending => {}
+                GraphEvent::Output { buffer, .. } => {
+                    if matches!(
+                        buffer.header.info,
+                        FrameInfo::Packet {
+                            keyframe: Some(true),
+                            ..
+                        }
+                    ) {
+                        count += 1;
+                    }
+                }
+            }
+            assert!(start.elapsed() < Duration::from_secs(5));
+        }
+        assert!(count >= 3);
+        let video_id = g
+            .node_info("demux")
+            .unwrap()
+            .media
+            .as_ref()
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.kind == "video")
+            .unwrap()
+            .index as u32;
+        g.reset(1_250_000).unwrap();
+        let start = Instant::now();
+        loop {
+            match g.poll().unwrap() {
+                GraphEvent::Output { buffer, .. } if buffer.header.stream_id == video_id => {
+                    let FrameInfo::Packet {
+                        keyframe,
+                        pts,
+                        time_base,
+                        ..
+                    } = buffer.header.info
+                    else {
+                        panic!()
+                    };
+                    assert_eq!(
+                        keyframe,
+                        Some(true),
+                        "seek did not restore a keyframe for {source}"
+                    );
+                    let time = time_base.rescale(pts, Rational::MICROS).unwrap();
+                    assert!(
+                        (500000..=1_250_000).contains(&time),
+                        "unexpected GOP pre-roll: {time}"
+                    );
+                    break;
+                }
+                GraphEvent::End => panic!("seek after EOF produced nothing"),
+                _ => {}
+            }
+            assert!(start.elapsed() < Duration::from_secs(5));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires native component packs and fixtures"]
+fn compressed_mp3_remux_graph_never_creates_a_decoder() {
+    let e = engine();
+    let s = open(&e, "audio.mp3", Task::Probe);
+    let track = s.info().tracks[0].clone();
+    let mut request = Request::playback(fixture("audio.mp3"));
+    request.task = Task::Probe;
+    let path = PathBuf::from(fixture(&format!("copy-{}.mp3", std::process::id())));
+    let _ = std::fs::remove_file(&path);
+    let spec = GraphSpec {
+        nodes: vec![
+            NodeSpec {
+                id: "demux".into(),
+                config: NodeConfig {
+                    component: "native.demux".into(),
+                    settings: serde_json::to_value(request).unwrap(),
+                },
+            },
+            NodeSpec {
+                id: "copy".into(),
+                config: NodeConfig {
+                    component: "native.packet.copy".into(),
+                    settings: json!({}),
+                },
+            },
+            NodeSpec {
+                id: "mux".into(),
+                config: NodeConfig {
+                    component: "native.mp3.mux".into(),
+                    settings: json!({"track":track}),
+                },
+            },
+            NodeSpec {
+                id: "sink".into(),
+                config: NodeConfig {
+                    component: "native.file.sink".into(),
+                    settings: json!({"path":path}),
+                },
+            },
+        ],
+        edges: vec![
+            EdgeSpec::between("demux", "copy", Some(track.index as u32)),
+            EdgeSpec::between("copy", "mux", None),
+            EdgeSpec::between("mux", "sink", None),
+        ],
+    };
+    let mut graph = unsafe { e.graph(&spec, Cancellation::default()) }.unwrap();
+    let start = Instant::now();
+    while !matches!(graph.poll().unwrap(), GraphEvent::End) {
+        assert!(start.elapsed() < Duration::from_secs(5));
+    }
+    drop(graph);
+    let mut copied = open(&e, path.file_name().unwrap().to_str().unwrap(), Task::Audio);
+    assert!(samples(&mut copied) > 47000);
+    drop(copied);
+    std::fs::remove_file(path).unwrap();
+}
