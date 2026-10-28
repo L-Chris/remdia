@@ -8,18 +8,22 @@
 #include <cstring>
 #include <vector>
 #include <new>
+#include <cstdio>
 using Microsoft::WRL::ComPtr;
 struct Apartment {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     ~Apartment() { if (SUCCEEDED(result)) CoUninitialize(); }
 };
-static int failure(HRESULT hr) {
+static thread_local char last_error[512] = {};
+extern "C" const char *rm_image_last_error(void) { return last_error; }
+static int failure(HRESULT hr, const char *operation = "WIC") {
+    snprintf(last_error, sizeof(last_error), "%s: HRESULT 0x%08lx", operation, static_cast<unsigned long>(hr));
     if (hr == WINCODEC_ERR_COMPONENTNOTFOUND || hr == WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT) return 1;
     if (hr == E_OUTOFMEMORY || hr == STG_E_MEDIUMFULL) return 3;
     if (hr == WINCODEC_ERR_BADIMAGE || hr == WINCODEC_ERR_BADHEADER || hr == WINCODEC_ERR_STREAMREAD) return 2;
     return 4;
 }
-#define CHECK(call) do { HRESULT result = (call); if (FAILED(result)) return failure(result); } while (0)
+#define CHECK(call) do { HRESULT result = (call); if (FAILED(result)) return failure(result, #call); } while (0)
 static HRESULT factory(ComPtr<IWICImagingFactory>& f) {
     return CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&f));
 }
@@ -87,7 +91,10 @@ int rm_image_decode(const uint8_t *data, size_t size, uint32_t maxw, uint32_t ma
     RmImageProbe p; CHECK(describe(d.Get(), frame.Get(), &p));
     if (!p.width || !p.height || !maxw || !maxh || !maxpixels) return 3;
     ComPtr<IWICBitmapSource> source; CHECK(frame.As(&source));
-    UINT contexts = 0; CHECK(frame->GetColorContexts(0, nullptr, &contexts));
+    UINT contexts = 0;
+    HRESULT color_status = frame->GetColorContexts(0, nullptr, &contexts);
+    if (color_status == E_NOTIMPL || color_status == WINCODEC_ERR_UNSUPPORTEDOPERATION) contexts = 0;
+    else CHECK(color_status);
     if (contexts) {
         ComPtr<IWICColorContext> from, to; CHECK(f->CreateColorContext(&from)); CHECK(f->CreateColorContext(&to));
         IWICColorContext *first = from.Get(); UINT actual = 0; CHECK(frame->GetColorContexts(1, &first, &actual));

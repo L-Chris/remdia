@@ -121,3 +121,30 @@ fn image_metadata_limits_cancellation_and_alpha() {
     cancel.cancel();
     assert!(session.read().is_err());
 }
+
+#[test]
+#[ignore = "requires staged system image plugins"]
+fn webp_uses_the_system_codec_or_narrow_fallback_and_keeps_pixel_values() {
+    let engine = engine();
+    let frames = run(
+        &engine,
+        ImageInput::Bytes(
+            include_bytes!("../../../tests/fixtures/legacy-white.webp")
+                .as_slice()
+                .into(),
+        ),
+        vec![Op::new("decode", json!({}))],
+    );
+    assert_eq!(frames.len(), 1);
+    assert!(
+        matches!(frames[0].info(),FrameInfo::Image {image,..} if image.width==32&&image.height==64)
+    );
+    assert!(
+        frames[0]
+            .bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| p == &[250, 250, 250, 255])
+    );
+}

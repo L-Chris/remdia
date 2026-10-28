@@ -65,7 +65,16 @@ unsafe extern "C" {
     fn rm_image_supports(format: *const std::ffi::c_char, encode: i32) -> i32;
     fn rm_image_free(out: *mut Pixels);
 }
+#[cfg(windows)]
+unsafe extern "C" {
+    fn rm_image_last_error() -> *const std::ffi::c_char;
+}
 fn status(code: i32) -> Result<()> {
+    #[cfg(windows)]
+    if code != 0 {
+        let detail = unsafe { std::ffi::CStr::from_ptr(rm_image_last_error()) }.to_string_lossy();
+        bail!("system image error {code}: {detail}");
+    }
     match code {
         0 => Ok(()),
         1 => bail!("system image capability unavailable"),
