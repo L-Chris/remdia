@@ -171,6 +171,34 @@ impl Resample {
                 "set resampler layout",
             )?;
         }
+        if channels != self.channels {
+            let enabled = 1u32;
+            status(
+                unsafe {
+                    sys::audio_converter_set_property(
+                        fw,
+                        converter,
+                        u32::from_be_bytes(*b"dmix"),
+                        4,
+                        (&enabled as *const u32).cast(),
+                    )
+                },
+                "enable channel mixing",
+            )?;
+            let matrix = crate::mix::matrix(channels, self.channels)?;
+            status(
+                unsafe {
+                    sys::audio_converter_set_property(
+                        fw,
+                        converter,
+                        u32::from_be_bytes(*b"mmap"),
+                        (matrix.len() * 4) as u32,
+                        matrix.as_ptr().cast(),
+                    )
+                },
+                "set channel matrix",
+            )?;
+        }
         if rate != self.rate {
             let quality = 127u32;
             status(

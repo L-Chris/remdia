@@ -54,6 +54,8 @@ pub struct Decoder {
     stamps: VecDeque<Stamp>,
     pending: VecDeque<MediaBuffer>,
     first: bool,
+    seen_input: bool,
+    trace: bool,
     _apartment: Apartment,
 }
 impl Decoder {
@@ -96,7 +98,14 @@ impl Decoder {
             user[2] = 0xfe; // unspecified audio profile/level
             user.extend_from_slice(&extra);
             if aac {
-                input.SetBlob(&MF_MT_USER_DATA, &user)?;
+                input.SetBlob(
+                    &MF_MT_USER_DATA,
+                    if track.initialization["system_user_data"] == true {
+                        &extra
+                    } else {
+                        &user
+                    },
+                )?;
             }
             if matches!(codec, "flac" | "alac") {
                 input.SetBlob(&MF_MT_USER_DATA, &extra)?;
@@ -132,6 +141,8 @@ impl Decoder {
                 stamps: VecDeque::new(),
                 pending: VecDeque::new(),
                 first: true,
+                seen_input: false,
+                trace: config.settings["trace"].as_bool().unwrap_or(false),
                 _apartment: apartment,
             };
             decoder.refresh_format()?;
@@ -318,6 +329,9 @@ impl Component for Decoder {
             if duration > 0 {
                 sample.SetSampleDuration(time_base.rescale(i64::try_from(duration)?, tb)?)?;
             }
+            if self.trace {
+                eprintln!("{}: ProcessInput {} bytes", self.track.codec, data.len());
+            }
             match self.transform.ProcessInput(0, &sample, 0) {
                 Ok(()) => {
                     if self.track.codec == "mp3" {
@@ -331,6 +345,7 @@ impl Component for Decoder {
                             position: 0,
                         });
                     }
+                    self.seen_input = true;
                     self.discontinuity = false;
                     self.generation = input.header.generation;
                     if self.next_pts.is_none() {
@@ -344,11 +359,27 @@ impl Component for Decoder {
         }
     }
     fn receive(&mut self) -> Result<Receive> {
+        if !self.seen_input {
+            return Ok(if self.draining {
+                Receive::End
+            } else {
+                Receive::NeedInput
+            });
+        }
         if let Some(buffer) = self.pending.pop_front() {
             return Ok(Receive::Output(buffer));
         }
         unsafe {
+            if self.trace {
+                eprintln!("{}: query output requirement", self.track.codec);
+            }
             let requirements = self.transform.GetOutputStreamInfo(0)?;
+            if self.trace {
+                eprintln!(
+                    "{}: output requirement {}",
+                    self.track.codec, requirements.cbSize
+                );
+            }
             ensure!(
                 requirements.cbSize as usize <= self.info.max_output_bytes,
                 "system audio output requirement {} exceeds budget",
@@ -373,9 +404,15 @@ impl Component for Decoder {
                 pEvents: ManuallyDrop::new(None),
             };
             let mut status = 0;
+            if self.trace {
+                eprintln!("{}: ProcessOutput", self.track.codec);
+            }
             let result =
                 self.transform
                     .ProcessOutput(0, std::slice::from_mut(&mut output), &mut status);
+            if self.trace {
+                eprintln!("{}: ProcessOutput returned {result:?}", self.track.codec);
+            }
             let sample = ManuallyDrop::take(&mut output.pSample);
             drop(ManuallyDrop::take(&mut output.pEvents));
             match result {
@@ -495,6 +532,7 @@ impl Component for Decoder {
         self.stamps.clear();
         self.pending.clear();
         self.first = true;
+        self.seen_input = false;
         self.generation = generation;
         Ok(())
     }

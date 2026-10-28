@@ -9,8 +9,12 @@ mod apple_pcm;
 mod apple_resample;
 #[cfg(target_os = "macos")]
 mod audio_toolbox_sys;
+#[cfg(any(windows, target_os = "macos", test))]
+mod mix;
 #[cfg(windows)]
 mod windows_audio;
+#[cfg(windows)]
+mod windows_encode;
 #[cfg(windows)]
 mod windows_resample;
 use anyhow::Result;
@@ -32,6 +36,13 @@ fn descriptors() -> Vec<ComponentDescriptor> {
         input: Some(PortCaps::new(DataKind::Audio)),
         output: PortCaps::new(DataKind::Audio),
     });
+    #[cfg(windows)]
+    result.push(ComponentDescriptor {
+        id: "windows.mp3.encode".into(),
+        role: "encoder".into(),
+        input: Some(PortCaps::new(DataKind::Audio)),
+        output: PortCaps::new(DataKind::Bytes),
+    });
     result
 }
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
@@ -49,6 +60,10 @@ fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
             return Ok(Box::new(apple_pcm::Pcm::new(config)?));
         }
         return Ok(Box::new(apple_audio::Decoder::new(config)?));
+    }
+    #[cfg(windows)]
+    if config.component == "windows.mp3.encode" {
+        return Ok(Box::new(windows_encode::Encoder::new(config)?));
     }
     #[cfg(windows)]
     if config.component == "windows.audio.resample" {

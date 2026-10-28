@@ -325,7 +325,7 @@ fn windows_decode_fixture(name: &str, expected: usize) {
                 id: "decode".into(),
                 config: NodeConfig {
                     component: "windows.audio.decode".into(),
-                    settings: json!({"track":track}),
+                    settings: json!({"track":track,"trace":name=="cover.flac"}),
                 },
             },
         ],
@@ -389,4 +389,51 @@ fn windows_system_aac() {
 #[ignore = "requires staged Windows system audio plugins"]
 fn windows_system_wav_pcm() {
     windows_decode_fixture("audio.wav", 132300);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_mp3_encoder_emits_a_decodable_bitstream() {
+    let engine = engine();
+    let mut encoder = TrustedFactory(engine.registry())
+        .create(
+            &NodeConfig {
+                component: "windows.mp3.encode".into(),
+                settings: json!({"rate":16000,"channels":1}),
+            },
+            Cancellation::default(),
+        )
+        .unwrap();
+    let input = pcm(32000, 16000, 1, 0, 1);
+    assert_eq!(encoder.submit(&input).unwrap(), Submit::Accepted);
+    encoder.drain().unwrap();
+    let mut bytes = Vec::new();
+    for attempts in 0..1000 {
+        assert!(attempts < 999, "MP3 encoder stalled");
+        match encoder.receive().unwrap() {
+            Receive::End => break,
+            Receive::Output(buffer) => bytes.extend_from_slice(buffer.bytes()),
+            _ => panic!("MP3 encoder requested input after drain"),
+        }
+    }
+    assert!(bytes.len() > 1000);
+    assert!(bytes.windows(2).any(|p| p[0] == 255 && p[1] & 0xe0 == 0xe0));
+    let directory =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/system-tests");
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("remdia-system-mp3-{}.mp3", std::process::id()));
+    std::fs::write(&path, &bytes).unwrap();
+    let mut request = crate::Request::playback(path.to_str().unwrap());
+    request.task = crate::Task::Audio;
+    let mut session = unsafe { engine.open(request, Cancellation::default()).unwrap() };
+    let mut decoded = 0;
+    while let Some(frame) = session.read().unwrap() {
+        if let FrameInfo::Audio { samples, .. } = frame.info() {
+            decoded += samples;
+        }
+    }
+    drop(session);
+    std::fs::remove_file(path).unwrap();
+    assert!(decoded >= 30000, "MP3 output lost PCM");
 }

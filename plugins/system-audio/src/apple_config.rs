@@ -32,7 +32,7 @@ pub fn pcm_layout(channels: u16) -> Result<[u32; 3]> {
         1 => 4,
         2 => 3,
         3 => 7,
-        4 => 0x107,
+        4 => 0x33,
         5 => 0x37,
         6 => 0x3f,
         _ => anyhow::bail!("unsupported AudioToolbox channel layout"),

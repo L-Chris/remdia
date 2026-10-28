@@ -1146,6 +1146,7 @@ dependencies = [
  "remdia-graph",
  "remdia-plugin-abi",
  "serde_json",
+ "windows",
 ]
 
 [[package]]

@@ -7,6 +7,7 @@ use windows::Win32::{
     Media::MediaFoundation::*,
     System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
 };
+use windows::core::Interface;
 
 unsafe fn pcm_type(rate: u32, channels: u16, bits: u32, float: bool) -> Result<IMFMediaType> {
     unsafe {
@@ -138,6 +139,11 @@ impl Resample {
                 0,
             )?;
             transform.SetOutputType(0, &pcm_type(self.rate, self.channels, 32, true)?, 0)?;
+            if channels != self.channels {
+                let properties: IWMResamplerProps = transform.cast()?;
+                let mut matrix = crate::mix::matrix(channels, self.channels)?;
+                properties.SetUserChannelMtx(matrix.as_mut_ptr())?;
+            }
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             self.segment = Some(Segment {
