@@ -228,3 +228,44 @@ fn system_file_source_uses_content_instead_of_temporary_file_extension() {
     drop(session);
     std::fs::remove_file(source).unwrap();
 }
+
+#[test]
+#[ignore = "requires staged system media plugins"]
+fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
+    let engine = Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
+        128 * 1024 * 1024,
+    )
+    .unwrap();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    let mut request = Request::playback(root.join("audio-tail.flac").to_str().unwrap());
+    request.task = crate::Task::Audio;
+    request.policy = crate::ProviderPolicy::SystemOnly;
+    let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
+    // Match an application seek issued immediately after metadata publication.
+    for target in [3_600_000, 200_000, 3_600_000, 0] {
+        session.seek(target).unwrap();
+        let mut count = 0usize;
+        let mut last = target;
+        while let Some(frame) = session.read().unwrap() {
+            if let FrameInfo::Audio {
+                samples,
+                pts_us,
+                rate,
+                ..
+            } = *frame.info()
+            {
+                eprintln!("seek={target} pts={pts_us} samples={samples}");
+                assert!(pts_us >= last - 1 && pts_us <= 4_000_000);
+                count += samples;
+                last = pts_us + (samples as u64 * 1_000_000 / u64::from(rate)) as i64;
+            }
+        }
+        let expected = ((4_000_000 - target) as u64 * 48000 / 1_000_000) as usize;
+        assert!(
+            count.abs_diff(expected) <= 1,
+            "seek={target} samples={count}, expected={expected}"
+        );
+        assert!(last.abs_diff(4_000_000) <= 21, "seek={target} end={last}");
+    }
+}
