@@ -46,6 +46,7 @@ struct Network {
 impl Network {
     fn connect(&mut self) -> io::Result<()> {
         let started = Instant::now();
+        let mut request_retries = 0;
         loop {
             self.control.check().map_err(interrupted)?;
             if started.elapsed() > self.timeout {
@@ -67,7 +68,17 @@ impl Network {
             let response = match result {
                 Ok(r) => r,
                 Err(e) if e.is_timeout() || e.is_connect() => continue,
-                Err(e) => return Err(io::Error::other(e)),
+                // A peer can close after accepting our GET but before returning
+                // headers. Retrying this idempotent request is safe: position
+                // advances only after body bytes are admitted by Read below.
+                Err(e) if e.is_request() && request_retries < 3 => {
+                    request_retries += 1;
+                    continue;
+                }
+                Err(e) => {
+                    let detail = anyhow::Error::new(e);
+                    return Err(io::Error::other(format!("{detail:#}")));
+                }
             };
             if response.status().as_u16() == 416 && self.length.is_some_and(|l| self.position >= l)
             {
