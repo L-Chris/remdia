@@ -130,3 +130,62 @@ fn budgets_cancellation_bad_input_and_origin() {
     let f = s.read().unwrap().unwrap();
     assert!(f.info().pts_us().unwrap().abs() < 100000);
 }
+
+#[test]
+#[ignore = "requires staged capability pack and generated fixtures"]
+fn retained_frames_apply_backpressure_before_consuming_input() {
+    let e = engine();
+    let mut s = open(&e, "av.mkv", Task::Playback);
+    let first = s.read().unwrap().unwrap();
+    let second = s.read().unwrap().unwrap();
+    assert_eq!(e.budget().used(), 256 * 1024 * 1024);
+    assert!(s.read().is_err());
+    drop(first);
+    let third = s.read().unwrap().unwrap();
+    drop(second);
+    drop(third);
+    assert_eq!(e.budget().used(), 0);
+    let mut count = 3;
+    while s.read().unwrap().is_some() {
+        count += 1;
+    }
+    // Compare to a fresh session to detect a consumed/dropped packet on rejection.
+    let mut reference = open(&e, "av.mkv", Task::Playback);
+    let mut reference_count = 0;
+    while reference.read().unwrap().is_some() {
+        reference_count += 1;
+    }
+    assert_eq!(count, reference_count);
+}
+
+#[test]
+#[ignore = "requires staged capability pack"]
+fn cancellation_interrupts_blocked_network_open() {
+    use std::{
+        net::TcpListener,
+        sync::mpsc,
+        time::{Duration, Instant},
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, wait) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (_stream, _) = listener.accept().unwrap();
+        let _ = wait.recv_timeout(Duration::from_secs(5));
+    });
+    let cancel = Cancellation::default();
+    let c = cancel.clone();
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        c.cancel();
+    });
+    let e = engine();
+    let mut request = Request::playback(format!("http://{address}/blocked"));
+    request.task = Task::Probe;
+    let started = Instant::now();
+    assert!(unsafe { e.open(request, cancel) }.is_err());
+    assert!(started.elapsed() < Duration::from_secs(3));
+    let _ = stop.send(());
+    server.join().unwrap();
+    canceller.join().unwrap();
+}

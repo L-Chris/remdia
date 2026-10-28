@@ -1,4 +1,5 @@
 /* An independently compiled C host verifies the public header against the DLL. */
+#define _CRT_SECURE_NO_WARNINGS
 #include "remdia.h"
 #include <assert.h>
 #include <stdio.h>
