@@ -259,7 +259,9 @@ fn video_packets_cross_dlls_to_windows_decoder_and_seek() {
         t.seek(1000000).unwrap();
         let f = t.read().unwrap().unwrap();
         assert!(
-            matches!(f.info(),FrameInfo::Video {format,width:160,height:90,..} if format=="rgba")
+            matches!(f.info(),FrameInfo::Video {format,width:160,height:90,..} if format=="rgba"),
+            "{name}: {:?}",
+            f.info()
         );
     }
 }

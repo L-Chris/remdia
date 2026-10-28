@@ -55,6 +55,7 @@ pub struct Decoder {
     width: u32,
     height: u32,
     stride: usize,
+    display: DisplayArea,
     nal_length: usize,
     headers: Vec<u8>,
     inject: bool,
@@ -135,6 +136,91 @@ fn configuration(track: &Track) -> Result<(usize, Vec<u8>)> {
         Ok((0, data.clone()))
     }
 }
+/// Surface allocation dimensions can include codec alignment outside the image.
+#[derive(Clone, Copy, Default)]
+struct DisplayArea {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+fn display_area(media: &IMFMediaType, width: u32, height: u32) -> Result<DisplayArea> {
+    let mut area = DisplayArea {
+        x: 0,
+        y: 0,
+        width: width as usize,
+        height: height as usize,
+    };
+    for key in [MF_MT_MINIMUM_DISPLAY_APERTURE, MF_MT_GEOMETRIC_APERTURE] {
+        let mut bytes = [0u8; std::mem::size_of::<MFVideoArea>()];
+        let mut len = 0;
+        if unsafe { media.GetBlob(&key, &mut bytes, Some(&mut len)) }.is_ok()
+            && len as usize == bytes.len()
+        {
+            // MFVideoArea has only integer fields; the blob need not be aligned.
+            let aperture =
+                unsafe { std::ptr::read_unaligned(bytes.as_ptr().cast::<MFVideoArea>()) };
+            ensure!(
+                aperture.OffsetX.fract == 0 && aperture.OffsetY.fract == 0,
+                "fractional Windows display aperture is unsupported"
+            );
+            ensure!(
+                aperture.OffsetX.value >= 0
+                    && aperture.OffsetY.value >= 0
+                    && aperture.Area.cx > 0
+                    && aperture.Area.cy > 0,
+                "invalid Windows display aperture"
+            );
+            area = DisplayArea {
+                x: aperture.OffsetX.value as usize,
+                y: aperture.OffsetY.value as usize,
+                width: aperture.Area.cx as usize,
+                height: aperture.Area.cy as usize,
+            };
+            break;
+        }
+    }
+    ensure!(
+        area.x.is_multiple_of(2) && area.y.is_multiple_of(2),
+        "unaligned NV12 display aperture is unsupported"
+    );
+    ensure!(
+        area.x + area.width <= width as usize && area.y + area.height <= height as usize,
+        "display aperture exceeds Windows surface"
+    );
+    Ok(area)
+}
+fn copy_nv12(
+    bytes: &[u8],
+    stride: usize,
+    surface_height: usize,
+    area: DisplayArea,
+) -> Result<Vec<Vec<u8>>> {
+    let uv_width = area.width.div_ceil(2) * 2;
+    let uv_base = stride
+        .checked_mul(surface_height)
+        .context("NV12 surface overflow")?;
+    let mut y = Vec::with_capacity(area.width * area.height);
+    let mut uv = Vec::with_capacity(uv_width * area.height.div_ceil(2));
+    for row in 0..area.height {
+        let start = (area.y + row) * stride + area.x;
+        y.extend_from_slice(
+            bytes
+                .get(start..start + area.width)
+                .context("truncated NV12 luma")?,
+        );
+    }
+    for row in 0..area.height.div_ceil(2) {
+        let start = uv_base + (area.y / 2 + row) * stride + area.x;
+        uv.extend_from_slice(
+            bytes
+                .get(start..start + uv_width)
+                .context("truncated NV12 chroma")?,
+        );
+    }
+    Ok(vec![y, uv])
+}
+
 impl Decoder {
     pub fn new(config: &NodeConfig, control: Control) -> Result<Self> {
         control.check()?;
@@ -234,6 +320,7 @@ impl Decoder {
                 width: 0,
                 height: 0,
                 stride: 0,
+                display: DisplayArea::default(),
                 nal_length,
                 headers,
                 inject: true,
@@ -266,6 +353,7 @@ impl Decoder {
                 "unsupported Windows video dimensions/stride"
             );
             self.stride = stride as usize;
+            self.display = display_area(&media, self.width, self.height)?;
             let size = self
                 .stride
                 .checked_mul(self.height as usize + self.height.div_ceil(2) as usize)
@@ -445,11 +533,9 @@ impl Component for Decoder {
                 let mut ptr = std::ptr::null_mut();
                 buffer.Lock(&mut ptr, None, None)?;
                 let bytes = std::slice::from_raw_parts(ptr, len);
-                let planes = vec![
-                    bytes[..ysize].to_vec(),
-                    bytes[ysize..ysize + uvsize].to_vec(),
-                ];
+                let planes = copy_nv12(bytes, self.stride, self.height as usize, self.display);
                 buffer.Unlock()?;
+                let planes = planes?;
                 let media = self.transform.GetOutputCurrentType(0)?;
                 let sar = media
                     .GetUINT64(&MF_MT_PIXEL_ASPECT_RATIO)
@@ -468,17 +554,17 @@ impl Component for Decoder {
                 let info = FrameInfo::Video {
                     pts_us: pts,
                     duration_us: duration,
-                    width: self.width,
-                    height: self.height,
+                    width: self.display.width as u32,
+                    height: self.display.height as u32,
                     format: "nv12".into(),
                     planes: vec![
                         Plane {
-                            stride: self.stride,
-                            rows: self.height as usize,
+                            stride: self.display.width,
+                            rows: self.display.height,
                         },
                         Plane {
-                            stride: self.stride,
-                            rows: self.height.div_ceil(2) as usize,
+                            stride: self.display.width.div_ceil(2) * 2,
+                            rows: self.display.height.div_ceil(2),
                         },
                     ],
                     sample_aspect_ratio: Rational {
@@ -532,5 +618,42 @@ impl Component for Decoder {
         self.inject = true;
         self.generation = g;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn nv12_copy_omits_alignment_padding_and_respects_aperture() {
+        let bytes: Vec<_> = (0..72).collect(); // stride 8, six luma rows, three UV rows.
+        let planes = copy_nv12(
+            &bytes,
+            8,
+            6,
+            DisplayArea {
+                x: 2,
+                y: 2,
+                width: 4,
+                height: 2,
+            },
+        )
+        .unwrap();
+        assert_eq!(planes[0], [18, 19, 20, 21, 26, 27, 28, 29]);
+        assert_eq!(planes[1], [58, 59, 60, 61]);
+        assert!(
+            copy_nv12(
+                &bytes[..60],
+                8,
+                6,
+                DisplayArea {
+                    x: 2,
+                    y: 2,
+                    width: 4,
+                    height: 2
+                }
+            )
+            .is_err()
+        );
     }
 }

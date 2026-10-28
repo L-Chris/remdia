@@ -28,7 +28,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cache
         with:
           path: |
             ~/.cargo/registry
@@ -74,6 +75,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package decode failed' }
           & "$stage/remdia.exe" extract $media "$stage/audio.mp3" --duration-us 1000000
           if ($LASTEXITCODE -ne 0) { throw 'Relocated package MP3 failed' }
+      - uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+            .deps
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: remdia-windows-x86_64
