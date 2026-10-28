@@ -159,7 +159,8 @@ impl Decoder {
                 sys::audio_converter_set_property(
                     fw,
                     converter,
-                    u32::from_be_bytes(*b"ocly"),
+                    // kAudioConverterOutputChannelLayout (AudioConverter.h).
+                    u32::from_be_bytes(*b"ocl "),
                     std::mem::size_of_val(&layout) as u32,
                     layout.as_ptr().cast(),
                 )
