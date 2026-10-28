@@ -49,7 +49,10 @@ fn system_surround_audio_containers_drain_and_seek_through_the_public_graph() {
         let mut session = match unsafe { e.open(request, Cancellation::default()) } {
             Ok(session) => session,
             Err(error) if !name.starts_with("aac-") => {
-                assert!(format!("{error:#}").contains("system"));
+                assert!(
+                    format!("{error:#}").contains("system audio decoder unavailable"),
+                    "unexpected Dolby failure for {name}: {error:#}"
+                );
                 eprintln!("Optional system Dolby decoder unavailable for {name}: {error:#}");
                 continue;
             }

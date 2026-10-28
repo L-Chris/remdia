@@ -78,8 +78,10 @@ impl Plan {
                         format!("{}.audio.decode", std::env::consts::OS)
                     } else {
                         ensure!(
-                            request.policy != ProviderPolicy::SystemOnly,
-                            "system audio decoder unavailable for {}",
+                            request.policy != ProviderPolicy::SystemOnly
+                                && cfg!(windows)
+                                && track.codec == "vorbis",
+                            "system audio decoder unavailable for {}; no permitted compatibility decoder",
                             track.codec
                         );
                         format!("fallback.{}.decode", track.codec)
