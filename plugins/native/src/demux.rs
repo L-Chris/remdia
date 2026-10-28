@@ -417,10 +417,22 @@ impl Component for Demux {
             self.seek_video(track_id.context("no video track")?, target)?;
         } else {
             self.reopen()?;
+            // Elementary MPEG audio has no packet timestamps. Accurate seeking
+            // scans every intervening frame, which can wait on a progressive
+            // download's missing prefix. Use byte/duration estimation remotely;
+            // local files keep sample-accurate scanning. VBR remote seeks are
+            // therefore approximate until a timestamped container/index exists.
+            let mode = if self.request.source.starts_with("http")
+                && matches!(self.format.format_info().short_name, "mp1" | "mp2" | "mp3")
+            {
+                SeekMode::Coarse
+            } else {
+                SeekMode::Accurate
+            };
             if self
                 .format
                 .seek(
-                    SeekMode::Accurate,
+                    mode,
                     SeekTo::Time {
                         time: Time::from_micros(target),
                         track_id,
