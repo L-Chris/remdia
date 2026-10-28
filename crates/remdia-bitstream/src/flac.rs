@@ -560,6 +560,43 @@ mod tests {
             .join(name)
     }
     #[test]
+    #[ignore = "requires scripts/fixtures.py long FLAC fixtures"]
+    fn long_random_seeks_keep_sparse_index_bounded() -> Result<()> {
+        let root = std::env::var_os("REMDIA_TEST_FIXTURES")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/fixtures"));
+        for name in [
+            "flac-long-1024.flac",
+            "flac-long-4096.flac",
+            "flac-long-table.flac",
+            "flac-long-variable.flac",
+        ] {
+            let mut reader = Reader::open(&root.join(name), 16 * 1024 * 1024, &|| Ok(()))?;
+            let mut random = 0x123456789abcdefu64;
+            for _ in 0..6000 {
+                random ^= random << 13;
+                random ^= random >> 7;
+                random ^= random << 17;
+                let target = random % reader.samples;
+                reader.seek(target, &|| Ok(()))?;
+                let packet = reader.next(&|| Ok(()))?.unwrap();
+                assert!(
+                    packet.sample <= target && target < packet.sample + u64::from(packet.frames)
+                );
+                let n = packet.bytes.len();
+                let actual = i16::from_be_bytes(packet.bytes[n - 4..n - 2].try_into()?);
+                assert_eq!(actual, ((packet.sample / 1024) % 30000) as i16 - 15000);
+                assert!(reader.index_entries() <= INDEX_LIMIT);
+            }
+            assert_eq!(
+                reader.index_entries(),
+                INDEX_LIMIT,
+                "{name}: never filled the sparse cache"
+            );
+        }
+        Ok(())
+    }
+    #[test]
     fn real_flac_frames_seek_before_read_and_after_eof() -> Result<()> {
         for (name, total, block) in [
             ("audio-tail.flac", 176400, 1024),

@@ -247,7 +247,7 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
         if pre_read {
             assert!(session.read().unwrap().is_some());
         }
-        for target in [3_600_000, 200_000, 3_600_000, 0] {
+        for target in [3_600_000, 200_000, 3_999_000, 3_600_000, 0] {
             session.seek(target).unwrap();
             let mut count = 0usize;
             let mut first = None;

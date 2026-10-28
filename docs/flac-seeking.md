@@ -79,6 +79,52 @@ The Windows workflow accepts an optional `flac_baseline_run` dispatch input to
 download a compatible baseline package and publish raw JSON. Regular CI does
 not depend on a historical artifact remaining available.
 
+## Windows measurements, 2026-10-28
+
+Baseline: release artifact for `5bba7ce`, which decodes from zero. Current:
+`b908539`, independent system MFT decoder with native FLAC framing. Measured on
+the same Windows-2025 runner (Windows Server 10.0.26100, AMD64), five fresh CLI
+processes per version/case with warmed file cache, requesting one PCM frame at
+29:58 in a 30-minute mono/48 kHz/16-bit synthetic file. No PCM cache is used.
+
+| Fixture | CLI wall time median, before → after | OS peak working set median, before → after |
+| --- | --- | --- |
+| Fixed 1024, no table | 8713.9 → 45.2 ms | 27.46 → 19.24 MiB |
+| Fixed 4096, no table | 2668.8 → 45.3 ms | 27.30 → 19.38 MiB |
+| Fixed 1024, SEEKTABLE | 8697.8 → 54.4 ms | 27.52 → 19.21 MiB |
+| Variable 1024/4096/2048, no table | 4594.7 → 48.8 ms | 27.55 → 19.30 MiB |
+
+These wall times include startup and exit. Separate in-process graph measurements
+on the certified Windows PR run reach first PCM in 0.77–1.65 ms, accepting two
+compressed packets (30–36 bytes) at the decoder. The framing adapter reads
+6,784–276,736 bytes during that first seek depending on the table/block layout.
+The large synthetic compression ratio does not model seek disk throughput on
+real music files, and the CLI process RSS is not whole-replayer memory usage.
+
+The sampler polls every 2 ms. RSS uses the OS-reported lifetime peak working set;
+private memory is a sampled maximum and can miss short peaks. The raw JSON
+retains every run, exit status, private-memory and process-I/O counters, and the
+CLI's managed-budget accounting. All 40 CLI runs produced a PCM frame.
+
+Windows SDK ZIP: 6,110,173 → 6,128,141 bytes (+17,968 bytes / 0.29%). The system
+demux DLL grows from 701,440 to 738,816 bytes. These are SDK package sizes,
+not replayer installer sizes. The PR artifacts record synthetic merge revisions
+`766726a` and `9a19554`; Git tree identities were verified equal to `5bba7ce`
+and `b908539`, respectively.
+
+No Cargo dependency or external codec build is added. Full clean build time was
+not re-measured for this seek patch; the broader SDK build measurements remain
+separate in [system-media-measurements.md](system-media-measurements.md).
+
+- [Raw measurement data](measurements/2026-10-28-windows-flac.json)
+- [Windows measurement run](https://github.com/L-Chris/remdia/actions/runs/40777914200)
+- [Windows component certification](https://github.com/L-Chris/remdia/actions/runs/40777883426)
+- [macOS 15 ARM/Intel certification](https://github.com/L-Chris/remdia/actions/runs/40777883474)
+
+Additional regression cases exercise the last partial frame as the only decoder
+input, and 24,000 deterministic random seeks with all four sparse caches reaching
+and remaining at the 4096-entry cap.
+
 Reference: [FLAC metadata and seek tables](https://www.rfc-editor.org/rfc/rfc9639.html#section-8.5),
 [FLAC frame format](https://www.rfc-editor.org/rfc/rfc9639.html#section-9),
 [Source Reader seek contract](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-imfsourcereader-setcurrentposition).
