@@ -139,10 +139,7 @@ impl Component for Decoder {
         packet.dts = Timestamp::new(dts);
         packet.trim_start = Duration::new(trim_start);
         packet.trim_end = Duration::new(trim_end);
-        let decoded = match self.decoder.decode_ref(&packet) {
-            Ok(v) => v,
-            Err(e) => return Err(e.into()),
-        };
+        let decoded = self.decoder.decode_ref(&packet)?;
         let count = decoded.samples_interleaved();
         if count == 0 {
             return Ok(Receive::NeedInput);
