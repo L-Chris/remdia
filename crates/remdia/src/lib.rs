@@ -285,7 +285,9 @@ impl Session {
         self.seek(start_us)?;
         let capacity = usize::try_from((i128::from(duration_us) * 16000 + 999_999) / 1_000_000)?;
         let reservation = self.budget.reserve(capacity * 4)?;
-        let mut samples = Vec::new();
+        // Preallocate exactly the admitted chunk; geometric Vec growth could
+        // otherwise exceed the bytes reserved for managed PCM.
+        let mut samples = Vec::with_capacity(capacity);
         while let Some(frame) = self.read()? {
             let FrameInfo::Audio { pts_us, .. } = *frame.info() else {
                 continue;
