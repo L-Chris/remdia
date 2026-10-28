@@ -349,7 +349,19 @@ fn windows_decode_fixture(name: &str, expected: usize) {
             Some(track.index as u32),
         )],
     };
-    let mut graph = unsafe { engine.graph(&spec, Cancellation::default()).unwrap() };
+    let mut graph = match unsafe { engine.graph(&spec, Cancellation::default()) } {
+        Ok(graph) => graph,
+        Err(error)
+            if matches!(name, "audio.opus" | "audio-vorbis.ogg")
+                && format!("{error:#}").contains("no installed synchronous system decoder") =>
+        {
+            eprintln!(
+                "Verified optional system codec unavailable on this installation for {name}: {error:#}"
+            );
+            return;
+        }
+        Err(error) => panic!("{name}: {error:#}"),
+    };
     let mut total = 0;
     let mut first = None;
     let mut last = None;
@@ -450,4 +462,17 @@ fn windows_system_mp3_encoder_emits_a_decodable_bitstream() {
     drop(session);
     std::fs::remove_file(path).unwrap();
     assert!(decoded >= 30000, "MP3 output lost PCM");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_optional_system_opus_or_explicit_absence() {
+    windows_decode_fixture("audio.opus", 144000);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_optional_system_vorbis_or_explicit_absence() {
+    windows_decode_fixture("audio-vorbis.ogg", 132352);
 }

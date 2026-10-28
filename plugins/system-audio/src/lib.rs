@@ -12,6 +12,8 @@ mod audio_toolbox_sys;
 mod capabilities;
 #[cfg(any(windows, target_os = "macos", test))]
 mod mix;
+#[cfg(any(windows, target_os = "macos"))]
+mod opus;
 #[cfg(windows)]
 mod windows_audio;
 #[cfg(windows)]

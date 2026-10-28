@@ -6,7 +6,7 @@ use windows::Win32::{
     Media::MediaFoundation::*,
     System::Com::{
         CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-        CoUninitialize,
+        CoTaskMemFree, CoUninitialize,
     },
 };
 
@@ -39,6 +39,50 @@ struct Stamp {
     frames: usize,
     position: usize,
 }
+struct Activations {
+    ptr: *mut Option<IMFActivate>,
+    len: u32,
+}
+impl Drop for Activations {
+    fn drop(&mut self) {
+        unsafe {
+            if !self.ptr.is_null() {
+                for value in std::slice::from_raw_parts_mut(self.ptr, self.len as usize) {
+                    drop(value.take());
+                }
+                CoTaskMemFree(Some(self.ptr.cast()));
+            }
+        }
+    }
+}
+fn optional_transform(subtype: windows::core::GUID) -> Result<Option<IMFTransform>> {
+    unsafe {
+        let filter = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Audio,
+            guidSubtype: subtype,
+        };
+        let mut activations = Activations {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        };
+        MFTEnumEx(
+            MFT_CATEGORY_AUDIO_DECODER,
+            MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER,
+            Some(&filter),
+            None,
+            &mut activations.ptr,
+            &mut activations.len,
+        )?;
+        for index in 0..activations.len as usize {
+            if let Some(activate) = &*activations.ptr.add(index)
+                && let Ok(transform) = activate.ActivateObject::<IMFTransform>()
+            {
+                return Ok(Some(transform));
+            }
+        }
+        Ok(None)
+    }
+}
 pub struct Decoder {
     transform: IMFTransform,
     track: Track,
@@ -56,6 +100,8 @@ pub struct Decoder {
     first: bool,
     seen_input: bool,
     trace: bool,
+    private_skip: usize,
+    timestamp_shift: i64,
     _apartment: Apartment,
 }
 impl Decoder {
@@ -76,6 +122,8 @@ impl Decoder {
             "mp3" => (CMP3DecMediaObject, MFAudioFormat_MP3, false),
             "flac" => (CMSFLACDecMFT, MFAudioFormat_FLAC, false),
             "alac" => (CMSALACDecMFT, MFAudioFormat_ALAC, false),
+            "opus" => (windows::core::GUID::zeroed(), MFAudioFormat_Opus, false),
+            "vorbis" => (windows::core::GUID::zeroed(), MFAudioFormat_Vorbis, false),
             other => anyhow::bail!("unsupported Windows system audio codec {other}"),
         };
         ensure!(
@@ -83,8 +131,13 @@ impl Decoder {
             "AAC requires AudioSpecificConfig"
         );
         unsafe {
-            let transform: IMFTransform = CoCreateInstance(&class, None, CLSCTX_INPROC_SERVER)
-                .context("create Windows audio decoder")?;
+            let transform: IMFTransform = if class == windows::core::GUID::zeroed() {
+                optional_transform(subtype)?
+                    .context("no installed synchronous system decoder for this optional codec")?
+            } else {
+                CoCreateInstance(&class, None, CLSCTX_INPROC_SERVER)
+                    .context("create Windows system audio decoder")?
+            };
             let input = MFCreateMediaType()?;
             input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
             input.SetGUID(&MF_MT_SUBTYPE, &subtype)?;
@@ -107,6 +160,41 @@ impl Decoder {
                     },
                 )?;
             }
+            let pre_skip = if codec == "opus" {
+                ensure!(
+                    extra.len() >= 19 && &extra[..8] == b"OpusHead",
+                    "invalid OpusHead"
+                );
+                usize::from(u16::from_le_bytes([extra[10], extra[11]]))
+            } else {
+                0
+            };
+            if codec == "opus" {
+                input.SetBlob(&MF_MT_USER_DATA, &extra)?;
+            }
+            if codec == "vorbis" {
+                ensure!(
+                    extra.len() > 37
+                        && extra[..7] == *b"\x01vorbis"
+                        && extra[30..37] == *b"\x05vorbis",
+                    "invalid Vorbis initialization"
+                );
+                let mut user = Vec::new();
+                for value in [
+                    u32::from(track.channels),
+                    track.sample_rate,
+                    16,
+                    30,
+                    16,
+                    (extra.len() - 30) as u32,
+                ] {
+                    user.extend_from_slice(&value.to_le_bytes());
+                }
+                user.extend_from_slice(&extra[..30]);
+                user.extend_from_slice(b"\x03vorbis\0\0\0\0\0\0\0\0\x01");
+                user.extend_from_slice(&extra[30..]);
+                input.SetBlob(&MF_MT_USER_DATA, &user)?;
+            }
             if matches!(codec, "flac" | "alac") {
                 input.SetBlob(&MF_MT_USER_DATA, &extra)?;
                 if let Some(bits) = track.initialization["bits_per_sample"].as_u64() {
@@ -121,6 +209,11 @@ impl Decoder {
             transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
             let mut output = PortCaps::new(DataKind::Audio);
             output.format = Some("f32le".into());
+            let timestamp_shift = if track.initialization["container"] == "ogg" {
+                pre_skip as i64
+            } else {
+                0
+            };
             let mut decoder = Self {
                 transform,
                 track,
@@ -143,18 +236,24 @@ impl Decoder {
                 first: true,
                 seen_input: false,
                 trace: config.settings["trace"].as_bool().unwrap_or(false),
+                private_skip: pre_skip,
+                timestamp_shift,
                 _apartment: apartment,
             };
             decoder.refresh_format()?;
             Ok(decoder)
         }
     }
-    fn mp3_output(&mut self, bytes: Vec<u8>) -> Result<Receive> {
+    fn packet_output(&mut self, bytes: Vec<u8>) -> Result<Receive> {
         let stride = self.channels as usize * 4;
         let frames = bytes.len() / stride;
-        if self.first {
+        if self.first && self.track.codec != "vorbis" {
             self.first = false;
-            let nominal = if self.rate < 32000 { 576 } else { 1152 };
+            let nominal = self
+                .stamps
+                .front()
+                .map(|stamp| stamp.frames)
+                .context("missing decoder stamp")?;
             let mut implicit = (nominal - frames % nominal) % nominal;
             while implicit > 0 {
                 let stamp = self
@@ -200,8 +299,9 @@ impl Decoder {
                     pts_us: time_base
                         .rescale(pts, Rational::MICROS)?
                         .checked_add(
-                            ((stamp.position + start) as i128 * 1_000_000 / i128::from(self.rate))
-                                as i64,
+                            (((stamp.position + start) as i128 - i128::from(self.timestamp_shift))
+                                * 1_000_000
+                                / i128::from(self.rate)) as i64,
                         )
                         .context("MP3 timestamp overflow")?,
                     rate: self.rate,
@@ -347,16 +447,52 @@ impl Component for Decoder {
             }
             match self.transform.ProcessInput(0, &sample, 0) {
                 Ok(()) => {
-                    if self.track.codec == "mp3" {
-                        self.stamps.push_back(Stamp {
-                            header: input.header.clone(),
-                            frames: if self.track.sample_rate < 32000 {
-                                576
-                            } else {
-                                1152
-                            },
-                            position: 0,
-                        });
+                    if matches!(self.track.codec.as_str(), "mp3" | "opus" | "vorbis") {
+                        let frames = match self.track.codec.as_str() {
+                            "mp3" => {
+                                if self.track.sample_rate < 32000 {
+                                    576
+                                } else {
+                                    1152
+                                }
+                            }
+                            "opus" => {
+                                super::opus::packet_frames(data, self.track.sample_rate)? as usize
+                            }
+                            _ => {
+                                let frames = time_base
+                                    .rescale(
+                                        i64::try_from(duration)?,
+                                        Rational {
+                                            num: 1,
+                                            den: self.track.sample_rate as i32,
+                                        },
+                                    )?
+                                    .max(0) as usize;
+                                let FrameInfo::Packet { trim_end, .. } = input.header.info else {
+                                    unreachable!()
+                                };
+                                frames
+                                    .checked_add(usize::try_from(trim_end)?)
+                                    .context("Vorbis duration overflow")?
+                            }
+                        };
+                        ensure!(frames <= 32768, "audio packet duration exceeds budget");
+                        if frames > 0 {
+                            let mut header = input.header.clone();
+                            let trim = self.private_skip.min(frames);
+                            self.private_skip -= trim;
+                            if let FrameInfo::Packet { trim_start, .. } = &mut header.info {
+                                *trim_start = trim_start
+                                    .checked_add(trim as u64)
+                                    .context("trim overflow")?;
+                            }
+                            self.stamps.push_back(Stamp {
+                                header,
+                                frames,
+                                position: 0,
+                            });
+                        }
                     }
                     self.seen_input = true;
                     self.discontinuity = false;
@@ -500,8 +636,8 @@ impl Component for Decoder {
                 bytes.len() <= self.info.max_output_bytes,
                 "system PCM exceeds output budget"
             );
-            if self.track.codec == "mp3" {
-                return self.mp3_output(bytes);
+            if matches!(self.track.codec.as_str(), "mp3" | "opus" | "vorbis") {
+                return self.packet_output(bytes);
             }
             let samples = bytes.len() / usize::from(self.channels) / 4;
             self.next_pts =
@@ -546,6 +682,13 @@ impl Component for Decoder {
         self.pending.clear();
         self.first = true;
         self.seen_input = false;
+        self.private_skip = if self.track.codec == "opus" {
+            let extra: Vec<u8> =
+                serde_json::from_value(self.track.initialization["extra_data"].clone())?;
+            usize::from(u16::from_le_bytes([extra[10], extra[11]]))
+        } else {
+            0
+        };
         self.generation = generation;
         Ok(())
     }
@@ -566,6 +709,14 @@ pub fn capabilities() -> Result<serde_json::Value> {
         if unsafe { CoCreateInstance::<_, IMFTransform>(&class, None, CLSCTX_INPROC_SERVER) }
             .is_ok()
         {
+            decode.push(codec);
+        }
+    }
+    for (codec, subtype) in [
+        ("opus", MFAudioFormat_Opus),
+        ("vorbis", MFAudioFormat_Vorbis),
+    ] {
+        if optional_transform(subtype)?.is_some() {
             decode.push(codec);
         }
     }
