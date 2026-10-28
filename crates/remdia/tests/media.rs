@@ -346,7 +346,7 @@ fn compressed_video_seek_restores_a_preceding_random_access_packet_after_eof() {
             nodes: vec![NodeSpec {
                 id: "demux".into(),
                 config: NodeConfig {
-                    component: "native.demux".into(),
+                    component: "fallback.demux".into(),
                     settings: serde_json::to_value(request).unwrap(),
                 },
             }],

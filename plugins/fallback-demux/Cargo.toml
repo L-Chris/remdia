@@ -1,0 +1,17 @@
+[package]
+name = "remdia-backend-fallback-demux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+remdia-graph.workspace = true
+remdia-plugin-abi.workspace = true
+symphonia = { version = "0.6.1", default-features=false, features=["all-formats","all-meta","mpa","flac","aac","exp-video-codecs"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }

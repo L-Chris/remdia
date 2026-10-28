@@ -1,4 +1,3 @@
-use crate::audio::codec_registry;
 use anyhow::{Context, Result, ensure};
 use remdia_graph::*;
 use serde_json::json;
@@ -31,15 +30,91 @@ fn nearby_keyframe(keys: &[(i64, i64)], target: i64) -> Option<i64> {
         .map(|p| p.1)
 }
 fn codec_name(id: AudioCodecId) -> String {
-    use symphonia::core::codecs::audio::well_known::{CODEC_ID_AC3, CODEC_ID_EAC3};
-    match id {
-        CODEC_ID_AC3 => return "ac3".into(),
-        CODEC_ID_EAC3 => return "eac3".into(),
-        _ => {}
-    }
-    codec_registry()
-        .get_audio_decoder(id)
-        .map(|d| d.codec.info.short_name.to_owned())
+    use symphonia::core::codecs::audio::well_known::*;
+    let known = [
+        (CODEC_ID_PCM_S32LE, "pcm_s32le"),
+        (CODEC_ID_PCM_S32LE_PLANAR, "pcm_s32le_planar"),
+        (CODEC_ID_PCM_S32BE, "pcm_s32be"),
+        (CODEC_ID_PCM_S32BE_PLANAR, "pcm_s32be_planar"),
+        (CODEC_ID_PCM_S24LE, "pcm_s24le"),
+        (CODEC_ID_PCM_S24LE_PLANAR, "pcm_s24le_planar"),
+        (CODEC_ID_PCM_S24BE, "pcm_s24be"),
+        (CODEC_ID_PCM_S24BE_PLANAR, "pcm_s24be_planar"),
+        (CODEC_ID_PCM_S16LE, "pcm_s16le"),
+        (CODEC_ID_PCM_S16LE_PLANAR, "pcm_s16le_planar"),
+        (CODEC_ID_PCM_S16BE, "pcm_s16be"),
+        (CODEC_ID_PCM_S16BE_PLANAR, "pcm_s16be_planar"),
+        (CODEC_ID_PCM_S8, "pcm_s8"),
+        (CODEC_ID_PCM_S8_PLANAR, "pcm_s8_planar"),
+        (CODEC_ID_PCM_U32LE, "pcm_u32le"),
+        (CODEC_ID_PCM_U32LE_PLANAR, "pcm_u32le_planar"),
+        (CODEC_ID_PCM_U32BE, "pcm_u32be"),
+        (CODEC_ID_PCM_U32BE_PLANAR, "pcm_u32be_planar"),
+        (CODEC_ID_PCM_U24LE, "pcm_u24le"),
+        (CODEC_ID_PCM_U24LE_PLANAR, "pcm_u24le_planar"),
+        (CODEC_ID_PCM_U24BE, "pcm_u24be"),
+        (CODEC_ID_PCM_U24BE_PLANAR, "pcm_u24be_planar"),
+        (CODEC_ID_PCM_U16LE, "pcm_u16le"),
+        (CODEC_ID_PCM_U16LE_PLANAR, "pcm_u16le_planar"),
+        (CODEC_ID_PCM_U16BE, "pcm_u16be"),
+        (CODEC_ID_PCM_U16BE_PLANAR, "pcm_u16be_planar"),
+        (CODEC_ID_PCM_U8, "pcm_u8"),
+        (CODEC_ID_PCM_U8_PLANAR, "pcm_u8_planar"),
+        (CODEC_ID_PCM_F32LE, "pcm_f32le"),
+        (CODEC_ID_PCM_F32LE_PLANAR, "pcm_f32le_planar"),
+        (CODEC_ID_PCM_F32BE, "pcm_f32be"),
+        (CODEC_ID_PCM_F32BE_PLANAR, "pcm_f32be_planar"),
+        (CODEC_ID_PCM_F64LE, "pcm_f64le"),
+        (CODEC_ID_PCM_F64LE_PLANAR, "pcm_f64le_planar"),
+        (CODEC_ID_PCM_F64BE, "pcm_f64be"),
+        (CODEC_ID_PCM_F64BE_PLANAR, "pcm_f64be_planar"),
+        (CODEC_ID_PCM_ALAW, "pcm_alaw"),
+        (CODEC_ID_PCM_MULAW, "pcm_mulaw"),
+        (CODEC_ID_ADPCM_G722, "adpcm_g722"),
+        (CODEC_ID_ADPCM_G726, "adpcm_g726"),
+        (CODEC_ID_ADPCM_G726LE, "adpcm_g726le"),
+        (CODEC_ID_ADPCM_MS, "adpcm_ms"),
+        (CODEC_ID_ADPCM_IMA_WAV, "adpcm_ima_wav"),
+        (CODEC_ID_ADPCM_IMA_QT, "adpcm_ima_qt"),
+        (CODEC_ID_VORBIS, "vorbis"),
+        (CODEC_ID_OPUS, "opus"),
+        (CODEC_ID_SPEEX, "speex"),
+        (CODEC_ID_MUSEPACK, "musepack"),
+        (CODEC_ID_MP1, "mp1"),
+        (CODEC_ID_MP2, "mp2"),
+        (CODEC_ID_MP3, "mp3"),
+        (CODEC_ID_AAC, "aac"),
+        (CODEC_ID_AC3, "ac3"),
+        (CODEC_ID_EAC3, "eac3"),
+        (CODEC_ID_AC4, "ac4"),
+        (CODEC_ID_DCA, "dca"),
+        (CODEC_ID_ATRAC1, "atrac1"),
+        (CODEC_ID_ATRAC3, "atrac3"),
+        (CODEC_ID_ATRAC3PLUS, "atrac3plus"),
+        (CODEC_ID_ATRAC9, "atrac9"),
+        (CODEC_ID_WMA, "wma"),
+        (CODEC_ID_RA10, "ra10"),
+        (CODEC_ID_RA20, "ra20"),
+        (CODEC_ID_SIPR, "sipr"),
+        (CODEC_ID_COOK, "cook"),
+        (CODEC_ID_SBC, "sbc"),
+        (CODEC_ID_APTX, "aptx"),
+        (CODEC_ID_APTX_HD, "aptx_hd"),
+        (CODEC_ID_LDAC, "ldac"),
+        (CODEC_ID_BINK_AUDIO, "bink_audio"),
+        (CODEC_ID_SMACKER_AUDIO, "smacker_audio"),
+        (CODEC_ID_FLAC, "flac"),
+        (CODEC_ID_WAVPACK, "wavpack"),
+        (CODEC_ID_MONKEYS_AUDIO, "monkeys_audio"),
+        (CODEC_ID_ALAC, "alac"),
+        (CODEC_ID_TTA, "tta"),
+        (CODEC_ID_RALF, "ralf"),
+        (CODEC_ID_TRUEHD, "truehd"),
+    ];
+    known
+        .into_iter()
+        .find(|(codec, _)| *codec == id)
+        .map(|(_, name)| name.to_owned())
         .unwrap_or_else(|| id.to_string())
 }
 fn video_name(p: &symphonia::core::codecs::video::VideoCodecParameters) -> String {

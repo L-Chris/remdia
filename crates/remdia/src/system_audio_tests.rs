@@ -226,7 +226,7 @@ fn system_decoders_match_the_certified_fixture_timeline() {
         let source = TrustedFactory(engine.registry())
             .create(
                 &NodeConfig {
-                    component: "native.demux".into(),
+                    component: "fallback.demux".into(),
                     settings: serde_json::to_value(&request).unwrap(),
                 },
                 Cancellation::default(),
@@ -246,7 +246,7 @@ fn system_decoders_match_the_certified_fixture_timeline() {
                 NodeSpec {
                     id: "demux".into(),
                     config: NodeConfig {
-                        component: "native.demux".into(),
+                        component: "fallback.demux".into(),
                         settings: serde_json::to_value(&request).unwrap(),
                     },
                 },
@@ -311,7 +311,7 @@ fn windows_decode_fixture(name: &str, expected: usize) {
     let source = TrustedFactory(engine.registry())
         .create(
             &NodeConfig {
-                component: "native.demux".into(),
+                component: "fallback.demux".into(),
                 settings: serde_json::to_value(&request).unwrap(),
             },
             Cancellation::default(),
@@ -331,7 +331,7 @@ fn windows_decode_fixture(name: &str, expected: usize) {
             NodeSpec {
                 id: "demux".into(),
                 config: NodeConfig {
-                    component: "native.demux".into(),
+                    component: "fallback.demux".into(),
                     settings: serde_json::to_value(&request).unwrap(),
                 },
             },

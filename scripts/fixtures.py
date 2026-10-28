@@ -14,5 +14,5 @@ for source in (root / 'tests/fixtures').iterdir():
     if source.is_file():
         shutil.copy2(source, out / source.name)
 request = dict(source=str(out / 'av.mp4'), task='probe', audio_rate=48000, audio_channels=2, hardware=False, threads=2, timeout_ms=3000, max_frame_bytes=134217728, max_packet_bytes=16777216)
-(out / 'probe.json').write_text(json.dumps(dict(component='native.demux', settings=request)))
+(out / 'probe.json').write_text(json.dumps(dict(component='fallback.demux', settings=request)))
 print(out)

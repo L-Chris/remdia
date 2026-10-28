@@ -2,7 +2,7 @@ use anyhow::{Context, Result, ensure};
 use remdia_graph::*;
 use serde::Deserialize;
 use std::sync::OnceLock;
-use symphonia::core::{
+use symphonia_core::{
     audio::{Channels, Position},
     codecs::{
         audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions},
@@ -11,61 +11,19 @@ use symphonia::core::{
     packet::PacketRef,
     units::{Duration, Timestamp},
 };
-#[cfg(test)]
-mod tests;
 pub fn codec_registry() -> &'static CodecRegistry {
     static REGISTRY: OnceLock<CodecRegistry> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let mut registry = CodecRegistry::new();
-        symphonia::default::register_enabled_codecs(&mut registry);
+        registry.register_audio_decoder::<symphonia_codec_vorbis::VorbisDecoder>();
         registry.register_audio_decoder::<symphonia_adapter_libopus::OpusDecoder>();
         registry
     })
 }
-pub fn create(config: &NodeConfig) -> Result<Box<dyn Component>> {
-    use symphonia::core::codecs::audio::well_known::{CODEC_ID_AAC, CODEC_ID_AC3, CODEC_ID_EAC3};
-    let id = config.settings["track"]["initialization"]["codec_id"].as_str();
-    if id == Some(CODEC_ID_AC3.to_string().as_str())
-        || id == Some(CODEC_ID_EAC3.to_string().as_str())
-        || id == Some(CODEC_ID_AAC.to_string().as_str())
-            && config.settings["track"]["channels"].as_u64().unwrap_or(0) > 2
-    {
-        let codec = if id == Some(CODEC_ID_AC3.to_string().as_str()) {
-            "AC-3"
-        } else if id == Some(CODEC_ID_EAC3.to_string().as_str()) {
-            "E-AC-3"
-        } else {
-            "multichannel AAC"
-        };
-        #[cfg(windows)]
-        {
-            Ok(Box::new(
-                super::windows_audio::Decoder::new(config).with_context(|| {
-                    format!("Windows system {codec} decoder is unavailable or incompatible")
-                })?,
-            ))
-        }
-        #[cfg(target_os = "macos")]
-        {
-            Ok(Box::new(
-                super::apple_audio::Decoder::new(config).with_context(|| {
-                    format!("macOS system {codec} decoder is unavailable or incompatible")
-                })?,
-            ))
-        }
-        #[cfg(not(any(windows, target_os = "macos")))]
-        {
-            anyhow::bail!("{codec} requires a supported system audio decoder");
-        }
-    } else {
-        Ok(Box::new(Decoder::new(config)?))
-    }
-}
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
+#[serde(default)]
 struct Wire {
-    codec_id: String,
     sample_rate: Option<u32>,
-    channels: u16,
     channel_mask: u64,
     bits_per_sample: Option<u32>,
     bits_per_coded_sample: Option<u32>,
@@ -94,20 +52,21 @@ impl Decoder {
             "audio decoder requires an audio track"
         );
         let wire: Wire = serde_json::from_value(track.initialization.clone())?;
-        let codec = known_codecs()
-            .into_iter()
-            .find(|id| id.to_string() == wire.codec_id)
-            .context("unknown audio codec id")?;
+        let codec = match track.codec.as_str() {
+            "opus" => symphonia_core::codecs::audio::well_known::CODEC_ID_OPUS,
+            "vorbis" => symphonia_core::codecs::audio::well_known::CODEC_ID_VORBIS,
+            _ => anyhow::bail!("codec is outside this narrow fallback"),
+        };
         let channels = if wire.channel_mask != 0 {
             Some(Channels::Positioned(Position::from_bits_truncate(
                 wire.channel_mask,
             )))
         } else {
-            (wire.channels > 0).then_some(Channels::Discrete(wire.channels))
+            Some(Channels::Discrete(track.channels))
         };
         let params = AudioCodecParameters {
             codec,
-            sample_rate: wire.sample_rate,
+            sample_rate: Some(wire.sample_rate.unwrap_or(track.sample_rate)),
             channels,
             bits_per_sample: wire.bits_per_sample,
             bits_per_coded_sample: wire.bits_per_coded_sample,
@@ -182,7 +141,6 @@ impl Component for Decoder {
         packet.trim_end = Duration::new(trim_end);
         let decoded = match self.decoder.decode_ref(&packet) {
             Ok(v) => v,
-            Err(symphonia::core::errors::Error::DecodeError(_)) => return Ok(Receive::NeedInput),
             Err(e) => return Err(e.into()),
         };
         let count = decoded.samples_interleaved();
@@ -197,12 +155,36 @@ impl Component for Decoder {
         let frames = decoded.frames();
         let rate = spec.rate();
         let bytes = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        let mut timestamp = time_base.rescale(pts, Rational::MICROS)?;
+        timestamp = timestamp
+            .checked_add((u128::from(trim_start) * 1_000_000 / u128::from(rate)) as i64)
+            .context("trim timestamp overflow")?;
+        if self.track.codec == "opus" {
+            let playable = time_base
+                .rescale(
+                    i64::try_from(duration)?,
+                    Rational {
+                        num: 1,
+                        den: rate as i32,
+                    },
+                )?
+                .max(0) as u64;
+            let implicit = playable.saturating_sub(frames as u64);
+            let shift = if self.track.initialization["container"] == "ogg" {
+                let extra: Vec<u8> =
+                    serde_json::from_value(self.track.initialization["extra_data"].clone())?;
+                ensure!(extra.len() >= 19, "invalid OpusHead");
+                u64::from(u16::from_le_bytes([extra[10], extra[11]]))
+            } else {
+                0
+            };
+            timestamp = i64::try_from(
+                i128::from(timestamp)
+                    + (i128::from(implicit) - i128::from(shift)) * 1_000_000 / i128::from(rate),
+            )?;
+        }
         let info = FrameInfo::Audio {
-            pts_us: time_base.rescale(
-                pts.checked_add(i64::try_from(trim_start)?)
-                    .context("trimmed audio timestamp overflow")?,
-                Rational::MICROS,
-            )?,
+            pts_us: timestamp,
             rate,
             channels,
             samples: frames,
@@ -222,93 +204,10 @@ impl Component for Decoder {
         Ok(())
     }
     fn reset(&mut self, _generation: u64, _target: i64) -> Result<()> {
-        self.decoder.reset();
-        self.pending = None;
-        self.draining = false;
+        *self = Self::new(&NodeConfig {
+            component: format!("fallback.{}.decode", self.track.codec),
+            settings: serde_json::json!({"track":self.track}),
+        })?;
         Ok(())
     }
-}
-
-fn known_codecs() -> Vec<symphonia::core::codecs::audio::AudioCodecId> {
-    use symphonia::core::codecs::audio::well_known::*;
-    vec![
-        CODEC_ID_PCM_S32LE,
-        CODEC_ID_PCM_S32LE_PLANAR,
-        CODEC_ID_PCM_S32BE,
-        CODEC_ID_PCM_S32BE_PLANAR,
-        CODEC_ID_PCM_S24LE,
-        CODEC_ID_PCM_S24LE_PLANAR,
-        CODEC_ID_PCM_S24BE,
-        CODEC_ID_PCM_S24BE_PLANAR,
-        CODEC_ID_PCM_S16LE,
-        CODEC_ID_PCM_S16LE_PLANAR,
-        CODEC_ID_PCM_S16BE,
-        CODEC_ID_PCM_S16BE_PLANAR,
-        CODEC_ID_PCM_S8,
-        CODEC_ID_PCM_S8_PLANAR,
-        CODEC_ID_PCM_U32LE,
-        CODEC_ID_PCM_U32LE_PLANAR,
-        CODEC_ID_PCM_U32BE,
-        CODEC_ID_PCM_U32BE_PLANAR,
-        CODEC_ID_PCM_U24LE,
-        CODEC_ID_PCM_U24LE_PLANAR,
-        CODEC_ID_PCM_U24BE,
-        CODEC_ID_PCM_U24BE_PLANAR,
-        CODEC_ID_PCM_U16LE,
-        CODEC_ID_PCM_U16LE_PLANAR,
-        CODEC_ID_PCM_U16BE,
-        CODEC_ID_PCM_U16BE_PLANAR,
-        CODEC_ID_PCM_U8,
-        CODEC_ID_PCM_U8_PLANAR,
-        CODEC_ID_PCM_F32LE,
-        CODEC_ID_PCM_F32LE_PLANAR,
-        CODEC_ID_PCM_F32BE,
-        CODEC_ID_PCM_F32BE_PLANAR,
-        CODEC_ID_PCM_F64LE,
-        CODEC_ID_PCM_F64LE_PLANAR,
-        CODEC_ID_PCM_F64BE,
-        CODEC_ID_PCM_F64BE_PLANAR,
-        CODEC_ID_PCM_ALAW,
-        CODEC_ID_PCM_MULAW,
-        CODEC_ID_ADPCM_G722,
-        CODEC_ID_ADPCM_G726,
-        CODEC_ID_ADPCM_G726LE,
-        CODEC_ID_ADPCM_MS,
-        CODEC_ID_ADPCM_IMA_WAV,
-        CODEC_ID_ADPCM_IMA_QT,
-        CODEC_ID_VORBIS,
-        CODEC_ID_OPUS,
-        CODEC_ID_SPEEX,
-        CODEC_ID_MUSEPACK,
-        CODEC_ID_MP1,
-        CODEC_ID_MP2,
-        CODEC_ID_MP3,
-        CODEC_ID_AAC,
-        CODEC_ID_AC3,
-        CODEC_ID_EAC3,
-        CODEC_ID_AC4,
-        CODEC_ID_DCA,
-        CODEC_ID_ATRAC1,
-        CODEC_ID_ATRAC3,
-        CODEC_ID_ATRAC3PLUS,
-        CODEC_ID_ATRAC9,
-        CODEC_ID_WMA,
-        CODEC_ID_RA10,
-        CODEC_ID_RA20,
-        CODEC_ID_SIPR,
-        CODEC_ID_COOK,
-        CODEC_ID_SBC,
-        CODEC_ID_APTX,
-        CODEC_ID_APTX_HD,
-        CODEC_ID_LDAC,
-        CODEC_ID_BINK_AUDIO,
-        CODEC_ID_SMACKER_AUDIO,
-        CODEC_ID_FLAC,
-        CODEC_ID_WAVPACK,
-        CODEC_ID_MONKEYS_AUDIO,
-        CODEC_ID_ALAC,
-        CODEC_ID_TTA,
-        CODEC_ID_RALF,
-        CODEC_ID_TRUEHD,
-    ]
 }

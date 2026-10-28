@@ -18,6 +18,21 @@ use windows::{
     },
     core::{GUID, PCWSTR},
 };
+use windows::{
+    Win32::{
+        Storage::EnhancedStorage::{
+            PKEY_Music_AlbumTitle, PKEY_Music_Artist, PKEY_ThumbnailStream, PKEY_Title,
+        },
+        System::{
+            Com::{CoTaskMemFree, IStream, StructuredStorage::PropVariantToStringAlloc},
+            Variant::{VT_STREAM, VT_UNKNOWN},
+        },
+        UI::Shell::PropertiesSystem::{
+            GPS_DEFAULT, IPropertyStore, SHGetPropertyStoreFromParsingName,
+        },
+    },
+    core::Interface,
+};
 struct Apartment;
 impl Apartment {
     fn new() -> Result<Self> {
@@ -144,6 +159,8 @@ pub struct Demux {
     generation: u64,
     ended: BTreeSet<u32>,
     selected: BTreeSet<u32>,
+    source: std::path::PathBuf,
+    properties: Option<IPropertyStore>,
     _apartment: Apartment,
 }
 impl Demux {
@@ -156,6 +173,7 @@ impl Demux {
             "system demux currently requires a local file source"
         );
         let source = std::path::Path::new(&request.source).canonicalize()?;
+        let file_path = source.clone();
         let source = source.to_str().context("invalid media file path")?;
         let source = if let Some(unc) = source.strip_prefix(r"\\?\UNC\") {
             format!(r"\\{unc}")
@@ -198,6 +216,30 @@ impl Demux {
             } else {
                 None
             };
+            let properties: Option<IPropertyStore> =
+                SHGetPropertyStoreFromParsingName(PCWSTR(source.as_ptr()), None, GPS_DEFAULT).ok();
+            let mut metadata = BTreeMap::new();
+            if let Some(store) = &properties {
+                for (key, name) in [
+                    (PKEY_Title, "title"),
+                    (PKEY_Music_Artist, "artist"),
+                    (PKEY_Music_AlbumTitle, "album"),
+                ] {
+                    if let Ok(mut value) = store.GetValue(&key) {
+                        if let Ok(text) = PropVariantToStringAlloc(&value) {
+                            let string = text.to_string();
+                            CoTaskMemFree(Some(text.0.cast()));
+                            if let Ok(string) = string
+                                && !string.is_empty()
+                                && string.len() <= 8192
+                            {
+                                metadata.insert(name.into(), string);
+                            }
+                        }
+                        let _ = PropVariantClear(&mut value);
+                    }
+                }
+            }
             Ok(Self {
                 reader,
                 info: NodeInfo {
@@ -208,7 +250,7 @@ impl Demux {
                         container: "mediafoundation".into(),
                         duration_us: duration,
                         origin_us: 0,
-                        metadata: BTreeMap::new(),
+                        metadata,
                         tracks,
                     }),
                 },
@@ -216,6 +258,8 @@ impl Demux {
                 generation: 1,
                 ended: BTreeSet::new(),
                 selected,
+                source: file_path,
+                properties,
                 _apartment: apartment,
             })
         }
@@ -308,6 +352,76 @@ impl Component for Demux {
                 vec![bytes],
             )))
         }
+    }
+    fn command(&mut self, command: &serde_json::Value) -> Result<Option<MediaBuffer>> {
+        if command["op"] != "artwork" {
+            return Ok(None);
+        }
+        self.control.check()?;
+        let image =
+            if let Some(bytes) = super::metadata::flac_artwork(&self.source, 8 * 1024 * 1024)? {
+                Some(bytes)
+            } else if let Some(store) = &self.properties {
+                unsafe {
+                    let stream = if let Ok(mut value) = store.GetValue(&PKEY_ThumbnailStream) {
+                        let inner = &value.Anonymous.Anonymous;
+                        let stream: Option<IStream> = if inner.vt == VT_STREAM {
+                            (*inner.Anonymous.pStream).clone()
+                        } else if inner.vt == VT_UNKNOWN {
+                            inner
+                                .Anonymous
+                                .punkVal
+                                .as_ref()
+                                .and_then(|unknown| unknown.cast().ok())
+                        } else {
+                            None
+                        };
+                        let _ = PropVariantClear(&mut value);
+                        stream
+                    } else {
+                        None
+                    };
+                    if let Some(stream) = stream {
+                        let mut bytes = Vec::new();
+                        let mut chunk = [0u8; 65536];
+                        loop {
+                            self.control.check()?;
+                            let mut read = 0;
+                            let result = stream.Read(
+                                chunk.as_mut_ptr().cast(),
+                                chunk.len() as u32,
+                                Some(&mut read),
+                            );
+                            result.ok()?;
+                            ensure!(
+                                bytes.len() + read as usize <= 8 * 1024 * 1024,
+                                "system artwork exceeds budget"
+                            );
+                            bytes.extend_from_slice(&chunk[..read as usize]);
+                            if read == 0 || result == windows::core::HRESULT(1) {
+                                break;
+                            }
+                        }
+                        (!bytes.is_empty()).then_some(bytes)
+                    } else {
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+        Ok(image.map(|bytes| {
+            MediaBuffer::new(
+                BufferHeader {
+                    stream_id: 0,
+                    generation: self.generation,
+                    info: FrameInfo::Artwork {
+                        codec: "system-image".into(),
+                    },
+                },
+                vec![bytes],
+            )
+        }))
     }
     fn drain(&mut self) -> Result<()> {
         self.ended = self.selected.clone();

@@ -10,19 +10,6 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 anyhow.workspace = true
-serde.workspace = true
 serde_json.workspace = true
-remdia-types.workspace = true
 remdia-graph.workspace = true
 remdia-plugin-abi.workspace = true
-symphonia = { version = "0.6.1", features = ["all", "exp-video-codecs"] }
-symphonia-adapter-libopus = "0.3"
-rubato = { version = "0.16.2", default-features = false }
-mp3lame-encoder = { version = "0.2.5", features = ["std"] }
-reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
-
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Media_MediaFoundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Foundation"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libloading = "0.8"

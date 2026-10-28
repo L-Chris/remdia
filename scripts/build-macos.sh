@@ -16,7 +16,6 @@ case "$target" in
   x86_64-apple-darwin) arch=x86_64 ;;
   *) echo "Unsupported macOS target: $target" >&2; exit 2 ;;
 esac
-command -v cmake >/dev/null || { echo 'CMake is required for vendored Opus.' >&2; exit 1; }
 args=(build --workspace --locked --target "$target")
 if [[ $profile == release ]]; then args+=(--release); fi
 cargo "${args[@]}"

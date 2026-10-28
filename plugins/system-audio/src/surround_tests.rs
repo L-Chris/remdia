@@ -3,9 +3,9 @@ use serde_json::json;
 
 fn config(id: &str, channels: u16, extra: &[u8]) -> NodeConfig {
     NodeConfig {
-        component: "native.audio.decode".into(),
+        component: format!("{}.audio.decode", std::env::consts::OS),
         settings: json!({"track":{
-            "index":2,"kind":"audio","codec":id,"time_base":{"num":1,"den":1000},
+            "index":2,"kind":"audio","codec":match id {"0x1007"=>"aac","0x1008"=>"ac3",_=>"eac3"},"time_base":{"num":1,"den":1000},
             "width":0,"height":0,"sample_rate":48000,"channels":channels,
             "attached_picture":false,"metadata":{},"initialization":{"codec_id":id,"extra_data":extra}
         }}),
@@ -14,9 +14,9 @@ fn config(id: &str, channels: u16, extra: &[u8]) -> NodeConfig {
 #[cfg(any(windows, target_os = "macos"))]
 fn packets(id: &str) -> Vec<Vec<u8>> {
     let mut bytes = match id {
-        "0x1007" => include_bytes!("../../../../tests/fixtures/aac-surround.aac").as_slice(),
-        "0x1008" => include_bytes!("../../../../tests/fixtures/ac3-surround.ac3").as_slice(),
-        "0x1009" => include_bytes!("../../../../tests/fixtures/eac3-surround.eac3").as_slice(),
+        "0x1007" => include_bytes!("../../../tests/fixtures/aac-surround.aac").as_slice(),
+        "0x1008" => include_bytes!("../../../tests/fixtures/ac3-surround.ac3").as_slice(),
+        "0x1009" => include_bytes!("../../../tests/fixtures/eac3-surround.eac3").as_slice(),
         _ => unreachable!(),
     };
     let mut out = Vec::new();
@@ -103,12 +103,15 @@ fn round(decoder: &mut dyn Component, packets: &[Vec<u8>], generation: u64) -> V
 fn system_surround_codecs_drain_and_reset_without_stale_pcm() {
     for id in ["0x1007", "0x1008", "0x1009"] {
         let config = config(id, 6, if id == "0x1007" { &[0x11, 0xb0] } else { &[] });
-        let mut decoder = match create(&config) {
+        let mut decoder = match create(&config, control()) {
             Ok(decoder) => decoder,
             Err(error) if id != "0x1007" => {
                 // Clean OS installations may omit Dolby. Verify the explicit
                 // failure contract, without loading a third-party decoder.
-                assert!(error.to_string().contains("system"));
+                assert!(
+                    error.to_string().contains("system")
+                        || error.to_string().contains("AudioToolbox")
+                );
                 eprintln!("System Dolby codec {id} unavailable: {error:#}");
                 continue;
             }
@@ -144,5 +147,15 @@ fn system_surround_codecs_drain_and_reset_without_stale_pcm() {
 }
 #[test]
 fn invalid_system_layout_fails_instead_of_falling_back_to_a_decoder() {
-    assert!(create(&config("0x1009", 0, &[])).is_err());
+    assert!(create(&config("0x1009", 0, &[]), control()).is_err());
+}
+
+fn control() -> Control {
+    unsafe extern "C" fn poll(_: *mut std::ffi::c_void) -> u8 {
+        0
+    }
+    Control(remdia_plugin_abi::Control {
+        context: std::ptr::null_mut(),
+        cancelled: poll,
+    })
 }

@@ -169,10 +169,9 @@ fn system_only_playback_does_not_require_a_compatibility_pack() {
         128 * 1024 * 1024,
     )
     .unwrap();
-    engine
-        .registry
-        .candidates
-        .retain(|candidate| candidate.manifest.id != "native");
+    engine.registry.candidates.retain(|candidate| {
+        candidate.manifest.id != "native" && !candidate.manifest.id.starts_with("fallback_")
+    });
     let source =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/av.mp4");
     let mut request = Request::playback(source.to_str().unwrap());

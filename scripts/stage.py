@@ -33,7 +33,10 @@ def copy_binary(source, destination):
 
 copy_binary(build / exe, out / exe)
 for pack, capabilities in [
-    ('native', ['native.demux', 'native.audio.decode', 'native.audio.resample', 'native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.mp3.encode', 'native.packet.copy', 'native.mp3.mux', 'native.file.sink']),
+    ('native', ['native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.packet.copy', 'native.mp3.mux', 'native.file.sink']),
+    ('fallback_demux', ['fallback.demux']),
+    ('fallback_opus_vorbis', ['fallback.opus.decode','fallback.vorbis.decode']),
+    ('fallback_mp3_lame', ['fallback.mp3.encode']),
     ('windows', ['windows.video.decode']),
     ('macos', ['macos.video.decode']),
     ('image', [f'{os_name}.image.{op}' for op in ['decode', 'probe', 'from_video', 'scale', 'crop', 'alpha', 'orient', 'tile', 'compose', 'encode', 'capabilities']]),
@@ -41,6 +44,10 @@ for pack, capabilities in [
     ('system_demux', [f'{os_name}.demux', f'{os_name}.demux.capabilities']),
     ('system_audio', [f'{os_name}.audio.decode', f'{os_name}.audio.resample', f'{os_name}.audio.capabilities'] + (['windows.mp3.encode'] if os_name == 'windows' else [])),
 ]:
+    if pack == 'fallback_opus_vorbis' and os_name != 'windows':
+        continue
+    if pack == 'fallback_mp3_lame' and os_name != 'macos':
+        continue
     if pack == 'system_demux' and os_name not in ('macos', 'windows'):
         continue
     if pack == 'system_audio' and os_name not in ('windows', 'macos'):

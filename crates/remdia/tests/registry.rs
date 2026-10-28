@@ -17,7 +17,7 @@ impl Directory {
         Self(path)
     }
     fn manifest(&self, file: &str, library: &str, os: &str) {
-        std::fs::write(self.0.join(file),serde_json::to_vec(&json!({"id":"test","abi_major":2,"os":os,"arch":std::env::consts::ARCH,"library":library,"capabilities":["native.demux"]})).unwrap()).unwrap();
+        std::fs::write(self.0.join(file),serde_json::to_vec(&json!({"id":"test","abi_major":2,"os":os,"arch":std::env::consts::ARCH,"library":library,"capabilities":["fallback.demux"]})).unwrap()).unwrap();
     }
 }
 impl Drop for Directory {
@@ -37,7 +37,7 @@ fn planning_does_not_load_code_or_probe_sources() {
             .nodes[0]
             .config
             .component,
-        "native.demux"
+        "fallback.demux"
     );
     dir.manifest("duplicate.json", "other.dll", std::env::consts::OS);
     assert!(Engine::discover(&dir.0, 256 * 1024 * 1024).is_err());
@@ -58,7 +58,7 @@ fn reject_traversal_oversize_and_old_abi() {
     for (major, minor) in [(1, 0), (2, u16::MAX)] {
         let value = json!({"id":"test", "abi_major":major, "abi_minor":minor,
             "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
-            "library":"other.dll", "capabilities":["native.demux"]});
+            "library":"other.dll", "capabilities":["fallback.demux"]});
         std::fs::write(dir.0.join("test.json"), serde_json::to_vec(&value).unwrap()).unwrap();
         assert!(
             Engine::discover(&dir.0, 256 * 1024 * 1024)

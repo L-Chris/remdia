@@ -93,3 +93,6 @@ fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     anyhow::bail!("unknown system audio component")
 }
 remdia_graph::export_plugin!(descriptors, create);
+
+#[cfg(all(test, any(windows, target_os = "macos")))]
+mod surround_tests;

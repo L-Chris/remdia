@@ -25,7 +25,7 @@ impl Plan {
                 request.policy != ProviderPolicy::SystemOnly,
                 "system demux capability pack is not installed"
             );
-            "native.demux".into()
+            "fallback.demux".into()
         };
         registry.select(&demux)?;
         Ok(Self {task:request.task,graph:GraphSpec {nodes:vec![NodeSpec {id:"demux".into(),config:NodeConfig {component:demux,settings:serde_json::to_value(request)?}}],edges:Vec::new()},managed_budget_bytes:budget,
@@ -82,7 +82,7 @@ impl Plan {
                             "system audio decoder unavailable for {}",
                             track.codec
                         );
-                        "native.audio.decode".into()
+                        format!("fallback.{}.decode", track.codec)
                     }
                 };
                 nodes.push(NodeSpec {id:id.clone(),config:NodeConfig {component,settings:json!({"track":track,"max_frame_bytes":request.max_frame_bytes,"hardware":request.hardware})}});
@@ -93,15 +93,11 @@ impl Plan {
                 ));
                 if track.kind == "audio" {
                     let filter = format!("audio_{}", track.index);
-                    let resample = if audio_caps["resample"] == true {
-                        format!("{}.audio.resample", std::env::consts::OS)
-                    } else {
-                        ensure!(
-                            request.policy != ProviderPolicy::SystemOnly,
-                            "system resampler unavailable"
-                        );
-                        "native.audio.resample".into()
-                    };
+                    ensure!(
+                        audio_caps["resample"] == true,
+                        "system resampler capability pack is unavailable"
+                    );
+                    let resample = format!("{}.audio.resample", std::env::consts::OS);
                     nodes.push(NodeSpec {id:filter.clone(),config:NodeConfig {component:resample,settings:json!({"rate":request.audio_rate,"channels":request.audio_channels})}});
                     edges.push(EdgeSpec::between(id, filter, None));
                 } else if request.task == Task::Thumbnail {

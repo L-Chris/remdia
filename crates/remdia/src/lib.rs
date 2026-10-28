@@ -178,14 +178,14 @@ impl Engine {
                     "system demux unavailable: {}",
                     caps["reason"]
                 );
-                "native.demux".into()
+                "fallback.demux".into()
             }
         } else {
             ensure!(
                 request.policy != ProviderPolicy::SystemOnly,
                 "system demux capability pack is not installed"
             );
-            "native.demux".into()
+            "fallback.demux".into()
         };
         let demux = factory.create(
             &NodeConfig {
@@ -274,7 +274,7 @@ fn encode_pcm_mp3(
     let component = if cfg!(windows) {
         "windows.mp3.encode"
     } else {
-        "native.mp3.encode"
+        "fallback.mp3.encode"
     };
     let spec = GraphSpec {
         nodes: vec![
