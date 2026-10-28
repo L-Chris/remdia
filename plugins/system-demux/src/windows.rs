@@ -230,10 +230,20 @@ impl Demux {
                 None
             };
             let mut mp3 = BTreeMap::new();
+            let single_track = tracks.len() == 1;
             for track in &mut tracks {
                 if track.codec == "flac"
                     && let Some(extra) = super::metadata::flac_streaminfo(&file_path)?
                 {
+                    // The container sample count is authoritative; the source
+                    // handler's duration can be estimated from compressed bytes.
+                    let packed = u64::from_be_bytes(extra[10..18].try_into()?);
+                    let samples = packed & ((1u64 << 36) - 1);
+                    if single_track && samples > 0 {
+                        duration = Some(i64::try_from(
+                            u128::from(samples) * 1_000_000 / u128::from(track.sample_rate),
+                        )?);
+                    }
                     track.initialization["extra_data"] = serde_json::json!(extra);
                 }
                 if track.codec == "mp3"
@@ -521,11 +531,25 @@ impl Component for Demux {
     }
     fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
         self.control.check()?;
-        let target = target
-            .saturating_sub(250000)
-            .max(0)
-            .checked_mul(10)
-            .context("seek timestamp overflow")?;
+        let flac = self
+            .info
+            .media
+            .as_ref()
+            .is_some_and(|media| media.tracks.iter().any(|track| track.codec == "flac"));
+        // MF's FLAC source can accept a nonzero seek and immediately report EOF
+        // for valid small-block streams. Rebuild decoder history from the start;
+        // Session clips the output at the requested sample. This deliberately
+        // trades seek latency for correctness until native random access is
+        // certified across FLAC block profiles.
+        let target = if flac {
+            0
+        } else {
+            target
+                .saturating_sub(250000)
+                .max(0)
+                .checked_mul(10)
+                .context("seek timestamp overflow")?
+        };
         unsafe {
             let mut value = PROPVARIANT::default();
             (*value.Anonymous.Anonymous).vt = VT_I8;

@@ -243,10 +243,12 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
     request.policy = crate::ProviderPolicy::SystemOnly;
     let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
     eprintln!("lossless source: {:?}", session.info());
-    // Match an application seek issued immediately after metadata publication.
+    // Exercise an in-flight decoder before the first application seek.
+    assert!(session.read().unwrap().is_some());
     for target in [3_600_000, 200_000, 3_600_000, 0] {
         session.seek(target).unwrap();
         let mut count = 0usize;
+        let mut first = None;
         let mut last = target;
         while let Some(frame) = session.read().unwrap() {
             if let FrameInfo::Audio {
@@ -256,12 +258,13 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
                 ..
             } = *frame.info()
             {
-                eprintln!("seek={target} pts={pts_us} samples={samples}");
+                first.get_or_insert(pts_us);
                 assert!(pts_us >= last - 1 && pts_us <= 4_000_000);
                 count += samples;
                 last = pts_us + (samples as u64 * 1_000_000 / u64::from(rate)) as i64;
             }
         }
+        eprintln!("seek={target} first={first:?} end={last} samples={count}");
         let expected = ((4_000_000 - target) as u64 * 48000 / 1_000_000) as usize;
         assert!(
             count.abs_diff(expected) <= 1,
