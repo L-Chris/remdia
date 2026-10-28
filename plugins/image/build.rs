@@ -17,6 +17,8 @@ fn main() {
         Ok("windows") => {
             cc::Build::new()
                 .cpp(true)
+                .define("NOMINMAX", None)
+                .flag("/EHsc")
                 .file("src/windows.cpp")
                 .warnings(true)
                 .compile("remdia_image");

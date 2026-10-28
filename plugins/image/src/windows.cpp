@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+#include <new>
 using Microsoft::WRL::ComPtr;
 struct Apartment {
     HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
@@ -146,7 +147,7 @@ public:
 int rm_image_encode(const uint8_t *data, uint32_t w, uint32_t h, size_t stride, int jpeg, double quality, size_t limit, RmImage *out) {
     memset(out, 0, sizeof(*out)); Apartment apartment; ComPtr<IWICImagingFactory> f; CHECK(factory(f));
     if (!w || !h || stride < (size_t)w * 4 || stride > MAXDWORD / h) return 3;
-    ComPtr<BoundedStream> stream; stream.Attach(new BoundedStream(limit));
+    ComPtr<BoundedStream> stream; stream.Attach(new(std::nothrow) BoundedStream(limit)); if (!stream) return 3;
     ComPtr<IWICBitmapEncoder> encoder; CHECK(f->CreateEncoder(jpeg ? GUID_ContainerFormatJpeg : GUID_ContainerFormatPng, nullptr, &encoder));
     CHECK(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache));
     ComPtr<IWICBitmapFrameEncode> frame; ComPtr<IPropertyBag2> properties; CHECK(encoder->CreateNewFrame(&frame, &properties));
