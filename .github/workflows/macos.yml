@@ -31,7 +31,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: command -v cmake || brew install cmake
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: cache
         with:
           path: |
             ~/.cargo/registry
@@ -59,6 +60,13 @@ jobs:
           ditto -x -k 'dist/remdia-macos-${{ matrix.arch }}.zip' "$moved"
           PATH=/usr/bin:/bin:/usr/sbin:/sbin "$moved/remdia" decode "$media" --software --frames 1000
           PATH=/usr/bin:/bin:/usr/sbin:/sbin "$moved/remdia" extract "$media" "$moved/speech.mp3" --duration-us 1000000
+      - uses: actions/cache/save@v4
+        if: always() && steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ${{ steps.cache.outputs.cache-primary-key }}
       - uses: actions/upload-artifact@v4
         with:
           name: remdia-macos-${{ matrix.arch }}
