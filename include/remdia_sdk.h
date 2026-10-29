@@ -15,7 +15,8 @@ extern "C" {
  * Its JSON/planes remain valid after seek and session close until release.
  * Release may happen on any thread. SDK library stays loaded through release.
  * read returns OK (a frame), EOF, or an error. Never reuse a closed handle.
- * close returns OK when consumed; an unsuccessful close keeps the handle live.
+ * close consumes the handle after validation, including if destruction panics.
+ * A null/wrong-worker validation error does not consume a live handle.
  */
 int32_t remdia_sdk_open(RemdiaView config, RemdiaView input, RemdiaControl control, void **job, RemdiaOutput *out);
 int32_t remdia_sdk_read(void *job, RemdiaOutput *out);

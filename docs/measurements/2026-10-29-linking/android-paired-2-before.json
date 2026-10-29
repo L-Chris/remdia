@@ -1,0 +1,290 @@
+{
+  "capabilities": {
+    "audio": {
+      "api": 35,
+      "codecs": [
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/mp4a-latm",
+          "name": "c2.android.aac.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/mp4a-latm",
+          "name": "OMX.google.aac.decoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/mp4a-latm",
+          "name": "c2.android.aac.encoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/mp4a-latm",
+          "name": "OMX.google.aac.encoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/3gpp",
+          "name": "c2.android.amrnb.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/3gpp",
+          "name": "OMX.google.amrnb.decoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/3gpp",
+          "name": "c2.android.amrnb.encoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/3gpp",
+          "name": "OMX.google.amrnb.encoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/amr-wb",
+          "name": "c2.android.amrwb.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/amr-wb",
+          "name": "OMX.google.amrwb.decoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/amr-wb",
+          "name": "c2.android.amrwb.encoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/amr-wb",
+          "name": "OMX.google.amrwb.encoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/flac",
+          "name": "c2.android.flac.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/flac",
+          "name": "OMX.google.flac.decoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/flac",
+          "name": "c2.android.flac.encoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/flac",
+          "name": "OMX.google.flac.encoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/g711-alaw",
+          "name": "c2.android.g711.alaw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/g711-alaw",
+          "name": "OMX.google.g711.alaw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/g711-mlaw",
+          "name": "c2.android.g711.mlaw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/g711-mlaw",
+          "name": "OMX.google.g711.mlaw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/mpeg",
+          "name": "c2.android.mp3.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/mpeg",
+          "name": "OMX.google.mp3.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/opus",
+          "name": "c2.android.opus.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/opus",
+          "name": "OMX.google.opus.decoder"
+        },
+        {
+          "encoder": true,
+          "hardware": false,
+          "mime": "audio/opus",
+          "name": "c2.android.opus.encoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/raw",
+          "name": "c2.android.raw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/raw",
+          "name": "OMX.google.raw.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/vorbis",
+          "name": "c2.android.vorbis.decoder"
+        },
+        {
+          "encoder": false,
+          "hardware": false,
+          "mime": "audio/vorbis",
+          "name": "OMX.google.vorbis.decoder"
+        }
+      ],
+      "decode": [
+        "aac",
+        "aac",
+        "audio/3gpp",
+        "audio/3gpp",
+        "audio/amr-wb",
+        "audio/amr-wb",
+        "flac",
+        "flac",
+        "audio/g711-alaw",
+        "audio/g711-alaw",
+        "audio/g711-mlaw",
+        "audio/g711-mlaw",
+        "mp3",
+        "mp3",
+        "opus",
+        "opus",
+        "pcm_s16le",
+        "pcm_s16le",
+        "vorbis",
+        "vorbis",
+        "pcm_s16le",
+        "pcm_f32le"
+      ],
+      "encode": [
+        "aac"
+      ],
+      "mp3_gapless": false,
+      "pcm_convert": "android.audio.convert",
+      "provider": "android",
+      "resample": false,
+      "system_encode": [
+        "aac",
+        "aac",
+        "audio/3gpp",
+        "audio/3gpp",
+        "audio/amr-wb",
+        "audio/amr-wb",
+        "flac",
+        "flac",
+        "opus"
+      ]
+    },
+    "demux": {
+      "api": 35,
+      "provider": "android",
+      "reason": "",
+      "supported": true
+    },
+    "images": {
+      "decode": [
+        "public.jpeg",
+        "public.png",
+        "org.webmproject.webp",
+        "com.compuserve.gif",
+        "com.microsoft.bmp"
+      ],
+      "encode": [
+        "public.jpeg",
+        "public.png"
+      ],
+      "provider": "android"
+    }
+  },
+  "passed": [
+    "runtime-capabilities",
+    "system-png-decode",
+    "system-webp-decode",
+    "scale-crop-orient-jpeg-roundtrip",
+    "system-png-encode-roundtrip",
+    "image-source-budget-rejection",
+    "system-image-straight-alpha",
+    "system-image-exif-probe-and-orient",
+    "system-embedded-artwork-image-graph",
+    "decode-src-audio.wav",
+    "decode-src-audio.mp3",
+    "decode-src-audio-tail.flac",
+    "decode-src-audio.opus",
+    "decode-src-audio-vorbis.ogg",
+    "flac-seek-eof-generation-held-frame",
+    "file-descriptor-input",
+    "content-uri-input",
+    "system-only-src-policy",
+    "system-only-native-rate-playback",
+    "system-video-av.mp4",
+    "system-video-av.mkv",
+    "system-video-thumbnail-image-graph",
+    "cross-thread-cancellation",
+    "independent-filter-system-aac-mp4-sink-roundtrip",
+    "atomic-file-sink-no-overwrite-race"
+  ],
+  "system_only_package": false,
+  "app_peak_pss_kib": 72455,
+  "app_baseline_pss_kib": 18789,
+  "app_peak_native_heap_bytes": 19234944,
+  "page_size": 4096,
+  "api": 35,
+  "model": "sdk_gphone64_arm64",
+  "elapsed_seconds": 1.971533876,
+  "success": true,
+  "aar_sha256": "3bd6f7e57e298ad43bd57598b9ff0bfc2938aa7c13493575314270f19d7d1c1d",
+  "abi": "arm64-v8a",
+  "native_sha256": {
+    "libremdia_backend_native.so": "54e316de361cf10b45e66020bbdb5e6e7fd3b06fde8da5ace80f62e6d8b30f94",
+    "libremdia_backend_android.so": "9f199bb3879b8e48ab5ec31a48901b33c351d0dd348e37a54d6b71450b3b77c7",
+    "libremdia_backend_image.so": "b451ebd14921bbce2f43ec86b26cec9de8f2bf2a8832dc4543834ae148141ef0",
+    "libremdia_backend_fallback_resample.so": "824434f4d829db7b47fa24ef68818a524a15ccb745c7986a377853777624a3af",
+    "libremdia_android_host.so": "06dd20b01b8222a82244cd621e791ab551ba7df77d37a08b25755efeebdd122a"
+  }
+}

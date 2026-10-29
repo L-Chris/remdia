@@ -41,6 +41,8 @@ macOS LAME 保持独立 dylib，未加入 builtin 依赖。replayer 使用 `bund
 
 句柄操作必须串行留在创建 worker，取消回调上下文活到作业关闭；输出只能释放一次，可跨线程释放。库本身必须保持加载，直至作业和所有输出都已释放。此接口沿用 remdia.h 的 ABI 2.2 输出结构。它不是将任意 Rust 对象暴露给 C。
 
+Android C 接口使用系统媒体/图片能力前同样需要调用 Java 的 `Remdia.initialize(context)` 初始化桥接。Windows 统一链接版本依赖系统的 Media Foundation 运行库，具体 codec/profile 仍在运行时查询。
+
 桌面构建脚本只构建单库 SDK、薄 CLI 和所需独立扩展。CLI 保持外部宿主模式，避免 SDK 压缩包同时包含两个完整的静态实现。`plugins/sdk.json` 让原有 `Engine::discover` 宿主通过既有组件 ABI 加载统一能力库；默认内置应用则使用 `Engine::bundled*`。
 
 Android AAR 每 ABI 只有 `libremdia_sdk.so`，同时提供既有 Java/JNI 接口。`--system-only` 通过关闭 feature 从单库中排除 SRC，不依赖删除一个 `.so`。`scripts/build-android.py --dynamic-plugins` 可构建旧多库模式作对照；`--dynamic-plugins --system-only` 同样可用。

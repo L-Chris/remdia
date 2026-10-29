@@ -2,7 +2,7 @@
 
 不依赖 FFmpeg 的模块化媒体 SDK。音频、视频和图片共用 Engine、Registry、GraphSpec、组件 C ABI 2.2、缓冲所有权、预算、取消与 generation；demux / decoder / filter / encoder / mux / sink 可逐节点组合。
 
-0.3 开发版优先使用 Windows Media Foundation / WIC 和 macOS AudioToolbox / AVFoundation / VideoToolbox / ImageIO / CoreGraphics。核心不链接媒体编解码库或平台框架；系统适配在独立能力包里。
+0.3 开发版优先使用 Windows Media Foundation / WIC 和 macOS AudioToolbox / AVFoundation / VideoToolbox / ImageIO / CoreGraphics。最小核心不链接媒体编解码库或平台框架；系统适配保持独立工厂，可按构建注册进应用或 SDK。
 
 默认发行使用统一链接：Rust 应用启用 `bundled` 将内置工厂直接链接进主程序，独立 SDK 输出一个原生库。工厂和插件图继续独立，外部 ABI 插件仍可加载；macOS LAME 保持独立扩展。[链接方式、裁剪与 C SDK 接口](docs/linking.md)。
 

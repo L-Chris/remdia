@@ -1,0 +1,28 @@
+{
+  "label": "replayer-before-1",
+  "command": [
+    "/Volumes/DevData/Projects/player/replayer/target/static-benchmark/before/replayer",
+    "--selftest",
+    "/Volumes/DevData/Projects/player/remdia/tests/fixtures/av.mp4"
+  ],
+  "cwd": "/Volumes/DevData/Projects/player/replayer",
+  "sample_interval_seconds": 0.02,
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "memory_limit_bytes": 6442450944,
+  "peak_tree_rss_bytes": 39501824,
+  "peak_tree_footprint_bytes": 13075512,
+  "peak_tree_processes": 2,
+  "aborted": null,
+  "swap_before_bytes": 1673852354,
+  "swap_peak_bytes": 1673852354,
+  "wall_seconds": 3.773629083,
+  "exit_code": 0,
+  "idle_rss_bytes": 0,
+  "idle_footprint_bytes": 0,
+  "idle_process_count": 0,
+  "swap_after_bytes": 1673852354,
+  "log_file": "/Volumes/DevData/Projects/player/replayer/target/static-benchmark/memory/before-1.log",
+  "time_file": "/Volumes/DevData/Projects/player/replayer/target/static-benchmark/memory/before-1.time",
+  "monitor_errors": [],
+  "foreground_max_single_process_rss_bytes": 38141952
+}

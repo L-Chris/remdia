@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--serial', required=True)
     parser.add_argument('--abi', default='arm64-v8a', choices=['arm64-v8a', 'x86_64'])
     parser.add_argument('--expected-page-size', type=int, choices=[4096, 16384])
+    parser.add_argument('--adb', type=Path, help='Use a specific platform-tools adb binary')
     parser.add_argument('--sdk', type=Path, default=Path(os.environ.get('ANDROID_HOME', ROOT / '.deps/android-sdk')))
     parser.add_argument('--java-home', type=Path, default=Path(os.environ.get('JAVA_HOME', ROOT / '.deps/android-jdk/Contents/Home')))
     args = parser.parse_args()
@@ -66,8 +67,8 @@ def main():
     run(tools / 'zipalign', '-P', '16', '-f', '4', unsigned, aligned)
     apk = work / 'remdia-smoke.apk'
     run(tools / 'apksigner', 'sign', '--ks', key, '--ks-pass', 'pass:android', '--out', apk, aligned)
-    adb = sdk / 'platform-tools/adb'
-    run(adb, '-s', args.serial, 'install', '-r', apk)
+    adb = (args.adb or sdk / 'platform-tools/adb').resolve()
+    run(adb, '-s', args.serial, 'install', '--no-incremental', '-r', apk)
     run(adb, '-s', args.serial, 'shell', 'run-as', 'dev.remdia.smoke', 'rm', '-f', 'files/report.json')
     run(adb, '-s', args.serial, 'shell', 'am', 'instrument', '-w', '-r', '-e', 'system_only', str(system_only).lower(), 'dev.remdia.smoke/dev.remdia.Smoke')
     raw = subprocess.check_output([str(adb), '-s', args.serial, 'exec-out', 'run-as', 'dev.remdia.smoke', 'cat', 'files/report.json'], env=env)

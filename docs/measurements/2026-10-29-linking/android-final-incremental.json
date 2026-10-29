@@ -1,0 +1,26 @@
+{
+  "profile": "release",
+  "system_only": false,
+  "layout": "unified",
+  "clippy": false,
+  "abis": {
+    "arm64-v8a": {
+      "build_seconds": 0.14,
+      "libraries": {
+        "libremdia_sdk.so": 1873568
+      },
+      "native_bytes": 1873568
+    },
+    "x86_64": {
+      "build_seconds": 0.192,
+      "libraries": {
+        "libremdia_sdk.so": 2090912
+      },
+      "native_bytes": 2090912
+    }
+  },
+  "ndk": "28.2.13676358",
+  "aar_bytes": 1761753,
+  "total_seconds": 0.805,
+  "sha256": "c92c7b54cdbf6f53b3f37db2c82c70a5699dca7a5b04adb54dce4142a66f4f80"
+}

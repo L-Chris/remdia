@@ -1,0 +1,195 @@
+{
+  "sdk_macos_before": {
+    "files": {
+      "remdia": 1173552,
+      "libremdia_backend_fallback_demux.dylib": 5341632,
+      "libremdia_backend_fallback_mp3_lame.dylib": 729600,
+      "libremdia_backend_image.dylib": 601056,
+      "libremdia_backend_macos.dylib": 734688,
+      "libremdia_backend_native.dylib": 646528,
+      "libremdia_backend_system_audio.dylib": 646336,
+      "libremdia_backend_system_demux.dylib": 702368
+    },
+    "binary_bytes": 10575760,
+    "binary_zip_bytes": 4951729
+  },
+  "sdk_macos_after": {
+    "files": {
+      "remdia": 1180272,
+      "libremdia_backend_fallback_mp3_lame.dylib": 733712,
+      "libremdia_sdk.dylib": 6465328
+    },
+    "binary_bytes": 8379312,
+    "binary_zip_bytes": 3973103
+  },
+  "replayer_macos_before": {
+    "files": {
+      "replayer": 23092464,
+      "libremdia_backend_fallback_demux.dylib": 5341632,
+      "libremdia_backend_fallback_mp3_lame.dylib": 729600,
+      "libremdia_backend_image.dylib": 601056,
+      "libremdia_backend_macos.dylib": 734688,
+      "libremdia_backend_native.dylib": 646512,
+      "libremdia_backend_system_audio.dylib": 646336,
+      "libremdia_backend_system_demux.dylib": 702368
+    },
+    "binary_bytes": 32494656,
+    "binary_zip_bytes": 15290989
+  },
+  "replayer_macos_after": {
+    "files": {
+      "replayer": 24811904,
+      "libremdia_backend_fallback_mp3_lame.dylib": 733712
+    },
+    "binary_bytes": 25545616,
+    "binary_zip_bytes": 12071925
+  },
+  "android_before_full": {
+    "profile": "release",
+    "system_only": false,
+    "abis": {
+      "arm64-v8a": {
+        "build_seconds": 2.392,
+        "libraries": {
+          "libremdia_backend_native.so": 680680,
+          "libremdia_backend_android.so": 915432,
+          "libremdia_backend_image.so": 784208,
+          "libremdia_backend_fallback_resample.so": 594176,
+          "libremdia_android_host.so": 1035616
+        },
+        "native_bytes": 4010112
+      },
+      "x86_64": {
+        "build_seconds": 2.111,
+        "libraries": {
+          "libremdia_backend_native.so": 740912,
+          "libremdia_backend_android.so": 1011800,
+          "libremdia_backend_image.so": 860960,
+          "libremdia_backend_fallback_resample.so": 646704,
+          "libremdia_android_host.so": 1147752
+        },
+        "native_bytes": 4408128
+      }
+    },
+    "ndk": "28.2.13676358",
+    "aar_bytes": 3913400,
+    "total_seconds": 5.031,
+    "sha256": "3bd6f7e57e298ad43bd57598b9ff0bfc2938aa7c13493575314270f19d7d1c1d"
+  },
+  "android_before_system-only": {
+    "profile": "release",
+    "system_only": true,
+    "abis": {
+      "arm64-v8a": {
+        "build_seconds": 0.194,
+        "libraries": {
+          "libremdia_backend_native.so": 680680,
+          "libremdia_backend_android.so": 915432,
+          "libremdia_backend_image.so": 784208,
+          "libremdia_android_host.so": 1035616
+        },
+        "native_bytes": 3415936
+      },
+      "x86_64": {
+        "build_seconds": 0.278,
+        "libraries": {
+          "libremdia_backend_native.so": 740912,
+          "libremdia_backend_android.so": 1011800,
+          "libremdia_backend_image.so": 860960,
+          "libremdia_android_host.so": 1147752
+        },
+        "native_bytes": 3761424
+      }
+    },
+    "ndk": "28.2.13676358",
+    "aar_bytes": 3312720,
+    "total_seconds": 1.572,
+    "sha256": "4ee765b2e425c1cd3b93e8fbb102fe7ed5ca495362deb9f20b783b507233eeb6"
+  },
+  "android_after_full": {
+    "profile": "release",
+    "system_only": false,
+    "layout": "unified",
+    "clippy": false,
+    "abis": {
+      "arm64-v8a": {
+        "build_seconds": 0.14,
+        "libraries": {
+          "libremdia_sdk.so": 1873568
+        },
+        "native_bytes": 1873568
+      },
+      "x86_64": {
+        "build_seconds": 0.192,
+        "libraries": {
+          "libremdia_sdk.so": 2090912
+        },
+        "native_bytes": 2090912
+      }
+    },
+    "ndk": "28.2.13676358",
+    "aar_bytes": 1761753,
+    "total_seconds": 0.805,
+    "sha256": "c92c7b54cdbf6f53b3f37db2c82c70a5699dca7a5b04adb54dce4142a66f4f80"
+  },
+  "android_after_system-only": {
+    "profile": "release",
+    "system_only": true,
+    "layout": "unified",
+    "clippy": false,
+    "abis": {
+      "arm64-v8a": {
+        "build_seconds": 4.968,
+        "libraries": {
+          "libremdia_sdk.so": 1834312
+        },
+        "native_bytes": 1834312
+      },
+      "x86_64": {
+        "build_seconds": 4.898,
+        "libraries": {
+          "libremdia_sdk.so": 2046544
+        },
+        "native_bytes": 2046544
+      }
+    },
+    "ndk": "28.2.13676358",
+    "aar_bytes": 1723348,
+    "total_seconds": 10.25,
+    "sha256": "9a410abc2428f3d163afc938aea13606e9d152ec89d2338fed4429337fe5aff6"
+  },
+  "android_memory_before": {
+    "median_app_peak_pss_kib": 72718,
+    "peak_pss_kib": [
+      72718,
+      72455,
+      72764
+    ]
+  },
+  "replayer_memory_before": {
+    "peak_tree_rss_bytes": 39731200,
+    "peak_tree_footprint_bytes": 12583968
+  },
+  "android_memory_after": {
+    "median_app_peak_pss_kib": 70899,
+    "peak_pss_kib": [
+      70966,
+      70704,
+      70899
+    ]
+  },
+  "replayer_memory_after": {
+    "peak_tree_rss_bytes": 37175296,
+    "peak_tree_footprint_bytes": 12321848
+  },
+  "review_packages": {
+    "replayer-0.5.0-macos-aarch64.zip": {
+      "bytes": 12735312,
+      "sha256": "2ae0c7a3cf276eea1554b2acf1291bc0c237dc4f51954ab19c71b8b3836d6548"
+    },
+    "replayer-0.5.0-macos-aarch64.dmg": {
+      "bytes": 14580995,
+      "sha256": "5f57910eb48e6b60cac723e4c9f2166bc7c6f3271794cbaf09062a7a169df842"
+    }
+  }
+}
