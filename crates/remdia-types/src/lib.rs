@@ -47,6 +47,7 @@ pub struct Request {
     #[serde(default)]
     pub policy: ProviderPolicy,
     pub task: Task,
+    /// Zero preserves the source sample rate; a nonzero value requests conversion.
     pub audio_rate: u32,
     pub audio_channels: u16,
     pub hardware: bool,
@@ -61,7 +62,11 @@ impl Request {
             source: source.into(),
             policy: ProviderPolicy::SystemPreferred,
             task: Task::Playback,
-            audio_rate: 48_000,
+            audio_rate: if cfg!(target_os = "android") {
+                0
+            } else {
+                48_000
+            },
             audio_channels: 2,
             hardware: true,
             threads: 2,
@@ -76,7 +81,7 @@ impl Request {
             "invalid source"
         );
         ensure!(
-            (8000..=192000).contains(&self.audio_rate),
+            self.audio_rate == 0 || (8000..=192000).contains(&self.audio_rate),
             "unsupported output sample rate"
         );
         ensure!(

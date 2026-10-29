@@ -5,8 +5,12 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Static registration keeps factory symbols private inside the host.
+builtin = []
+
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 anyhow.workspace = true

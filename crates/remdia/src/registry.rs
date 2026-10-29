@@ -26,11 +26,91 @@ pub struct Manifest {
 pub struct Candidate {
     pub manifest: Manifest,
     pub path: PathBuf,
+    builtin: Option<ffi::BuiltinPlugin>,
 }
+#[derive(Clone, Default)]
 pub struct Registry {
     pub candidates: Vec<Candidate>,
 }
 impl Registry {
+    pub fn register(&mut self, id: &str, plugin: ffi::BuiltinPlugin) -> Result<()> {
+        ensure!(
+            !self.candidates.iter().any(|c| c.manifest.id == id),
+            "duplicate plugin id"
+        );
+        let capabilities = (plugin.describe)().into_iter().map(|d| d.id).collect();
+        self.candidates.push(Candidate {
+            manifest: Manifest {
+                id: id.into(),
+                abi_major: abi::ABI_MAJOR,
+                abi_minor: abi::ABI_MINOR,
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                library: String::new(),
+                capabilities,
+            },
+            path: PathBuf::new(),
+            builtin: Some(plugin),
+        });
+        Ok(())
+    }
+    pub fn bundled() -> Result<Self> {
+        let mut registry = Self::default();
+        for (name, plugin) in crate::builtin::plugins() {
+            registry.register(&format!("builtin.{name}"), plugin)?;
+        }
+        ensure!(
+            !registry.candidates.is_empty(),
+            "no built-in packs enabled; enable the bundled feature"
+        );
+        Ok(registry)
+    }
+    pub fn extend(&mut self, other: Self) -> Result<()> {
+        ensure!(
+            !other.candidates.iter().any(|next| self
+                .candidates
+                .iter()
+                .any(|c| c.manifest.id == next.manifest.id)),
+            "duplicate plugin id"
+        );
+        self.candidates.extend(other.candidates);
+        Ok(())
+    }
+    /// Register libraries already loaded by an Android application's class loader.
+    /// Uses sonames, so APKs need not extract native libraries onto the filesystem.
+    /// # Safety
+    /// The supplied manifests must name trusted, preloaded native libraries.
+    pub unsafe fn preloaded(manifests: Vec<Manifest>) -> Result<Self> {
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for manifest in manifests {
+            ensure!(
+                manifest.abi_major == abi::ABI_MAJOR
+                    && manifest.abi_minor <= abi::ABI_MINOR
+                    && manifest.os == std::env::consts::OS
+                    && manifest.arch == std::env::consts::ARCH,
+                "incompatible preloaded capability pack"
+            );
+            let path = PathBuf::from(&manifest.library);
+            ensure!(
+                path.components().count() == 1
+                    && matches!(
+                        path.components().next(),
+                        Some(std::path::Component::Normal(_))
+                    ),
+                "plugin library must be a filename"
+            );
+            ensure!(
+                !candidates.iter().any(|c| c.manifest.id == manifest.id),
+                "duplicate plugin id"
+            );
+            candidates.push(Candidate {
+                manifest,
+                path,
+                builtin: None,
+            });
+        }
+        Ok(Self { candidates })
+    }
     pub fn discover(directory: impl AsRef<Path>) -> Result<Self> {
         let mut files = std::fs::read_dir(directory)?
             .map(|e| e.map(|e| e.path()))
@@ -73,6 +153,7 @@ impl Registry {
             candidates.push(Candidate {
                 path: path.parent().unwrap().join(relative),
                 manifest,
+                builtin: None,
             });
         }
         Ok(Self { candidates })
@@ -164,7 +245,14 @@ impl PlaneOwner for RawOutput {
 }
 impl Candidate {
     unsafe fn load(&self) -> Result<Arc<Module>> {
-        let path = self.path.canonicalize()?;
+        let path = if cfg!(target_os = "android") && self.path.components().count() == 1 {
+            // Preloaded APK libraries have a soname but need not have an
+            // extracted filesystem path. Android's class-loader namespace
+            // resolves the already loaded module.
+            self.path.clone()
+        } else {
+            self.path.canonicalize()?
+        };
         let mut cache = MODULES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
@@ -212,6 +300,9 @@ pub(crate) struct TrustedFactory<'a>(pub &'a Registry);
 impl Factory for TrustedFactory<'_> {
     fn create(&self, config: &NodeConfig, cancel: Cancellation) -> Result<Box<dyn Component>> {
         let candidate = self.0.select(&config.component)?;
+        if let Some(plugin) = candidate.builtin {
+            return StaticComponent::create(plugin, config, cancel);
+        }
         let module = unsafe { candidate.load() }?;
         ensure!(
             module.descriptors.iter().any(|d| d.id == config.component),
@@ -245,6 +336,97 @@ impl Factory for TrustedFactory<'_> {
         );
         component.info = Some(serde_json::from_slice(output.json()?)?);
         Ok(Box::new(component))
+    }
+}
+
+// Own the cancellation callback context for the entire component lifetime.
+// Inner buffers stay native Rust values: no per-frame JSON or ABI owner wrapper.
+struct StaticComponent {
+    inner: Option<Box<dyn Component>>,
+    control: Box<Cancellation>,
+    info: NodeInfo,
+    poisoned: bool,
+}
+impl StaticComponent {
+    fn create(
+        plugin: ffi::BuiltinPlugin,
+        config: &NodeConfig,
+        cancel: Cancellation,
+    ) -> Result<Box<dyn Component>> {
+        let control = Box::new(cancel);
+        let view = Control(abi::Control {
+            context: (&*control as *const Cancellation).cast_mut().cast(),
+            cancelled: poll_cancellation,
+        });
+        view.check()?;
+        let (inner, info) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<_> {
+                let inner = (plugin.create)(config, view)?;
+                let info = inner.info().clone();
+                Ok((inner, info))
+            }))
+            .map_err(|_| anyhow::anyhow!("component panic contained during creation"))??;
+        Ok(Box::new(Self {
+            inner: Some(inner),
+            control,
+            info,
+            poisoned: false,
+        }))
+    }
+    fn call<T>(&mut self, operation: impl FnOnce(&mut dyn Component) -> Result<T>) -> Result<T> {
+        ensure!(
+            !self.poisoned,
+            "component is poisoned after a contained panic"
+        );
+        match self.control.poll() {
+            0 => {}
+            2 => return Err(Interrupted.into()),
+            _ => anyhow::bail!("cancelled"),
+        }
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation(self.inner.as_deref_mut().unwrap())
+        })) {
+            Ok(value) => value,
+            Err(_) => {
+                self.poisoned = true;
+                anyhow::bail!("component panic contained")
+            }
+        }
+    }
+}
+impl Component for StaticComponent {
+    fn info(&self) -> &NodeInfo {
+        &self.info
+    }
+    fn submit(&mut self, input: &MediaBuffer) -> Result<Submit> {
+        input.validate()?;
+        self.call(|c| c.submit(input))
+    }
+    fn receive(&mut self) -> Result<Receive> {
+        let (result, info) = self.call(|c| {
+            let result = c.receive()?;
+            let info = matches!(result, Receive::Reconfigured).then(|| c.info().clone());
+            Ok((result, info))
+        })?;
+        if let Some(info) = info {
+            self.info = info;
+        }
+        Ok(result)
+    }
+    fn drain(&mut self) -> Result<()> {
+        self.call(|c| c.drain())
+    }
+    fn reset(&mut self, generation: u64, target: i64) -> Result<()> {
+        self.call(|c| c.reset(generation, target))
+    }
+    fn command(&mut self, value: &serde_json::Value) -> Result<Option<MediaBuffer>> {
+        self.call(|c| c.command(value))
+    }
+}
+impl Drop for StaticComponent {
+    fn drop(&mut self) {
+        let inner = self.inner.take();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(inner)));
     }
 }
 struct DynamicComponent {

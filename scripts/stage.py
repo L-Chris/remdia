@@ -5,6 +5,7 @@ import json
 import platform
 import shutil
 import subprocess
+import ctypes
 from pathlib import Path
 
 p = argparse.ArgumentParser()
@@ -12,6 +13,7 @@ p.add_argument('--profile', default='debug', choices=['debug', 'release'])
 p.add_argument('--target')
 p.add_argument('--build-directory', type=Path, help='Cargo target directory (defaults to checkout target/)')
 p.add_argument('--output', default='dist/remdia')
+p.add_argument('--layout', choices=['unified','legacy'], default='unified')
 a = p.parse_args()
 root = Path(__file__).resolve().parent.parent
 build = a.build_directory or root / 'target'
@@ -33,6 +35,7 @@ def copy_binary(source, destination):
     shutil.copy2(source, destination)
 
 copy_binary(build / exe, out / exe)
+builtin_capabilities = []
 for pack, capabilities in [
     ('native', ['native.audio.gain', 'native.video.rgba', 'native.wav.mux', 'native.packet.copy', 'native.mp3.mux', 'native.mp3.gapless_mux', 'native.file.sink']),
     ('fallback_demux', ['fallback.demux']),
@@ -53,9 +56,44 @@ for pack, capabilities in [
         continue
     if pack in ('windows', 'macos') and pack != os_name:
         continue
+    if a.layout == 'unified' and pack != 'fallback_mp3_lame':
+        for filename in (f'{pack}.json', f'remdia_backend_{pack}.dll', f'libremdia_backend_{pack}.dylib', f'libremdia_backend_{pack}.so'):
+            (plugins / filename).unlink(missing_ok=True)
+        if pack != 'fallback_demux' or os_name in ('windows','macos'):
+            builtin_capabilities.extend(capabilities)
+        continue
     library = {'windows': f'remdia_backend_{pack}.dll', 'macos': f'libremdia_backend_{pack}.dylib', 'linux': f'libremdia_backend_{pack}.so'}[os_name]
     copy_binary(build / library, plugins / library)
     (plugins / f'{pack}.json').write_text(json.dumps(dict(id=pack, abi_major=2, abi_minor=2, os=os_name, arch=arch, library=library, capabilities=capabilities), indent=2) + '\n')
+if a.layout == 'unified':
+    (plugins/'sdk.json').unlink(missing_ok=True)
+    library = {'windows':'remdia_sdk.dll','macos':'libremdia_sdk.dylib','linux':'libremdia_sdk.so'}[os_name]
+    copy_binary(build / library, plugins / library)
+    capabilities = sorted(builtin_capabilities)
+    # Query native artifacts; cross-stage uses the default bundled build contract.
+    host_os = {'Windows':'windows','Darwin':'macos','Linux':'linux'}[platform.system()]
+    host_arch = {'arm64':'aarch64','AMD64':'x86_64','x86_64':'x86_64','aarch64':'aarch64'}[platform.machine()]
+    if (os_name, arch) == (host_os, host_arch):
+        class Header(ctypes.Structure):
+            _fields_ = [('size',ctypes.c_uint32),('major',ctypes.c_uint16),('minor',ctypes.c_uint16)]
+        class View(ctypes.Structure):
+            _fields_ = [('ptr',ctypes.c_void_p),('len',ctypes.c_size_t)]
+        class Output(ctypes.Structure):
+            _fields_ = [('header',Header),('json',View),('planes',View*4),('owner',ctypes.c_void_p),('release',ctypes.c_void_p)]
+        class Api(ctypes.Structure):
+            _fields_ = [('header',Header)] + [(name,ctypes.c_void_p) for name in ('describe','create','submit','receive','drain','reset','command','close')]
+        loaded = ctypes.CDLL(str((plugins/library).resolve()))
+        query = loaded.remdia_plugin_query_v2
+        query.argtypes = [Header,ctypes.POINTER(Api)]; query.restype = ctypes.c_int32
+        api = Api(); assert query(Header(ctypes.sizeof(Api),2,2),ctypes.byref(api)) == 0
+        describe = ctypes.CFUNCTYPE(ctypes.c_int32,ctypes.POINTER(Output))(api.describe)
+        reply = Output(); assert describe(ctypes.byref(reply)) == 0
+        try: capabilities = sorted(d['id'] for d in json.loads(ctypes.string_at(reply.json.ptr,reply.json.len)))
+        finally: ctypes.CFUNCTYPE(None,ctypes.c_void_p)(reply.release)(reply.owner)
+    (plugins/'sdk.json').write_text(json.dumps(dict(id='sdk',abi_major=2,abi_minor=2,os=os_name,arch=arch,library=library,capabilities=capabilities),indent=2)+'\n')
+    (out/'BUNDLED.json').write_text(json.dumps(dict(layout='unified',abi_major=2,abi_minor=2,os=os_name,arch=arch,
+        capabilities=capabilities,external_plugins=['fallback_mp3_lame'] if os_name=='macos' else []),indent=2)+'\n')
+shutil.copytree(root / 'include', out / 'include', dirs_exist_ok=True)
 # Reject stale compatibility manifests when staging over an older build.
 for old in plugins.glob('*ffmpeg*'):
     old.unlink()

@@ -1,0 +1,88 @@
+{
+  "arm64-v8a": {
+    "libremdia_android_host.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 1035616
+    },
+    "libremdia_backend_android.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 915432
+    },
+    "libremdia_backend_fallback_resample.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "bytes": 594176
+    },
+    "libremdia_backend_image.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 784208
+    },
+    "libremdia_backend_native.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 680680
+    }
+  },
+  "x86_64": {
+    "libremdia_android_host.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 1147752
+    },
+    "libremdia_backend_android.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 1011800
+    },
+    "libremdia_backend_fallback_resample.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libm.so",
+        "libc.so"
+      ],
+      "bytes": 646704
+    },
+    "libremdia_backend_image.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 860960
+    },
+    "libremdia_backend_native.so": {
+      "minimum_load_alignment": 16384,
+      "needed": [
+        "libdl.so",
+        "libc.so"
+      ],
+      "bytes": 740912
+    }
+  }
+}

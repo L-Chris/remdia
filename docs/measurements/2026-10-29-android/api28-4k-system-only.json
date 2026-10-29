@@ -1,0 +1,170 @@
+{
+  "capabilities": {
+    "audio": {
+      "api": 28,
+      "codecs": [
+        {
+          "encoder": false,
+          "mime": "audio/mp4a-latm",
+          "name": "c2.android.aac.decoder"
+        },
+        {
+          "encoder": true,
+          "mime": "audio/mp4a-latm",
+          "name": "c2.android.aac.encoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/3gpp",
+          "name": "c2.android.amrnb.decoder"
+        },
+        {
+          "encoder": true,
+          "mime": "audio/3gpp",
+          "name": "c2.android.amrnb.encoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/amr-wb",
+          "name": "c2.android.amrwb.decoder"
+        },
+        {
+          "encoder": true,
+          "mime": "audio/amr-wb",
+          "name": "c2.android.amrwb.encoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/flac",
+          "name": "c2.android.flac.decoder"
+        },
+        {
+          "encoder": true,
+          "mime": "audio/flac",
+          "name": "c2.android.flac.encoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/g711-alaw",
+          "name": "c2.android.g711.alaw.decoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/g711-mlaw",
+          "name": "c2.android.g711.mlaw.decoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/mpeg",
+          "name": "c2.android.mp3.decoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/opus",
+          "name": "c2.android.opus.decoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/raw",
+          "name": "c2.android.raw.decoder"
+        },
+        {
+          "encoder": false,
+          "mime": "audio/vorbis",
+          "name": "c2.android.vorbis.decoder"
+        }
+      ],
+      "decode": [
+        "aac",
+        "audio/3gpp",
+        "audio/amr-wb",
+        "flac",
+        "audio/g711-alaw",
+        "audio/g711-mlaw",
+        "mp3",
+        "opus",
+        "pcm_s16le",
+        "vorbis",
+        "pcm_s16le",
+        "pcm_f32le"
+      ],
+      "encode": [
+        "aac"
+      ],
+      "mp3_gapless": false,
+      "pcm_convert": "android.audio.convert",
+      "provider": "android",
+      "resample": false,
+      "system_encode": [
+        "aac",
+        "audio/3gpp",
+        "audio/amr-wb",
+        "flac"
+      ]
+    },
+    "demux": {
+      "api": 28,
+      "provider": "android",
+      "reason": "",
+      "supported": true
+    },
+    "images": {
+      "decode": [
+        "public.jpeg",
+        "public.png",
+        "org.webmproject.webp",
+        "com.compuserve.gif",
+        "com.microsoft.bmp"
+      ],
+      "encode": [
+        "public.jpeg",
+        "public.png"
+      ],
+      "provider": "android"
+    }
+  },
+  "passed": [
+    "runtime-capabilities",
+    "system-png-decode",
+    "system-webp-decode",
+    "scale-crop-orient-jpeg-roundtrip",
+    "system-png-encode-roundtrip",
+    "image-source-budget-rejection",
+    "system-image-straight-alpha",
+    "system-image-exif-probe-and-orient",
+    "system-embedded-artwork-image-graph",
+    "decode-native-rate-audio.wav",
+    "decode-native-rate-audio.mp3",
+    "decode-native-rate-audio-tail.flac",
+    "decode-native-rate-audio.opus",
+    "decode-native-rate-audio-vorbis.ogg",
+    "flac-seek-eof-generation-held-frame",
+    "file-descriptor-input",
+    "content-uri-input",
+    "system-only-src-policy",
+    "system-only-native-rate-playback",
+    "system-video-av.mp4",
+    "system-video-av.mkv",
+    "system-video-thumbnail-image-graph",
+    "cross-thread-cancellation",
+    "independent-filter-system-aac-mp4-sink-roundtrip",
+    "atomic-file-sink-no-overwrite-race"
+  ],
+  "system_only_package": true,
+  "app_peak_pss_kib": 31898,
+  "app_baseline_pss_kib": 12143,
+  "app_peak_native_heap_bytes": 45137296,
+  "page_size": 4096,
+  "api": 28,
+  "model": "Android SDK built for arm64",
+  "elapsed_seconds": 2.325469042,
+  "success": true,
+  "aar_sha256": "4ee765b2e425c1cd3b93e8fbb102fe7ed5ca495362deb9f20b783b507233eeb6",
+  "abi": "arm64-v8a",
+  "native_sha256": {
+    "libremdia_backend_native.so": "54e316de361cf10b45e66020bbdb5e6e7fd3b06fde8da5ace80f62e6d8b30f94",
+    "libremdia_backend_android.so": "9f199bb3879b8e48ab5ec31a48901b33c351d0dd348e37a54d6b71450b3b77c7",
+    "libremdia_backend_image.so": "b451ebd14921bbce2f43ec86b26cec9de8f2bf2a8832dc4543834ae148141ef0",
+    "libremdia_android_host.so": "06dd20b01b8222a82244cd621e791ab551ba7df77d37a08b25755efeebdd122a"
+  }
+}

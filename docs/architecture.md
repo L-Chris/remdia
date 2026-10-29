@@ -10,12 +10,15 @@ remdia-cli / replayer -> remdia playback facade / public Engine::graph
                                   ^
         system_demux / system_audio: independent AVFoundation / MF / AudioToolbox nodes
         windows / macos: independent MF / VideoToolbox video decoder
-        image: WIC / ImageIO / CoreGraphics image nodes
+        android: MediaExtractor / MediaCodec / MediaMuxer nodes (API 28+)
+        image: WIC / ImageIO / CoreGraphics / Android ImageDecoder image nodes
         native: gain, pixel conversion, packet copy, simple mux and sink
-        fallback_demux / macOS-only fallback_mp3_lame: narrow gaps
+        fallback_demux / macOS-only fallback_mp3_lame / optional Android SRC: narrow gaps
 ```
 
 A capability pack registers multiple independent factories. Components are created individually, and every graph node owns its own submit/receive/drain/reset state. Media samples cross DLLs as immutable byte views with explicit retain/release callbacks. Native code remains loaded for the process lifetime. A session is a convenience graph builder; it does not contain a second, fused implementation.
+
+Default distribution now statically registers built-in factories inside the application or single-library SDK. Built-in edges pass MediaBuffer directly and share one set of Rust/JSON dependencies; external components retain the ABI above. Factory boundaries and graph composition do not require separate library files. The minimal core remains feature-free; see [linking layouts](linking.md).
 
 ## Graph execution
 
@@ -25,7 +28,7 @@ The runtime visits nodes in reverse topological order. A node's pending output i
 
 Before receive, the ledger reserves the advertised maximum output allocation; ABI 2.1 RECONFIGURED refreshes negotiated bounds and revalidates edges before the next output call; successful output reduces that reservation to the plane bytes actually returned. Clones share their owner. Cross-DLL wrappers can retain earlier reservations, so some pass-through paths are conservatively overcounted. Codec-internal allocations, source buffers, system MFT allocations and temporary file/export buffers are not a hard process memory cap. If reservation fails before a call, the input stream is not advanced.
 
-Arbitrary composition means compatible contracts, not arbitrary media conversions. A PCM edge cannot connect to a compressed-packet decoder. WAV requires its configured rate/channels and the planner/caller inserts a resampler. Multiple outgoing branches can apply different gains, sample rates and muxers. A demux → packet.copy → mp3.mux → sink path never creates a decoder. Output filenames must not exist; a sink uses a private temporary file and hard-link publication to prevent overwriting another writer.
+Arbitrary composition means compatible contracts, not arbitrary media conversions. A PCM edge cannot connect to a compressed-packet decoder. WAV requires its configured rate/channels and the planner/caller inserts a resampler. Multiple outgoing branches can apply different gains, sample rates and muxers. A demux → packet.copy → mp3.mux → sink path never creates a decoder. Output filenames must not exist; a sink publishes a private temporary file without replacement (hard-link on desktop, renameat2/NOREPLACE under Android SELinux).
 
 ## Time and cancellation
 
@@ -34,6 +37,8 @@ Packets retain PTS/DTS, duration, time base, trim start/end and stream identity.
 Seek records known random-access points and, for H.264/HEVC, searches preceding compressed packets with a bounded exponential pre-roll window when needed. A keyframe gate prevents starting a decoder on a preceding B/P frame. A fresh reader restores MP4 iterator state after EOF or interrupted partial reads; unknown random-access formats safely pre-roll from the start. All downstream nodes and queues reset under a new generation. The facade drops pre-target video and clips audio at sample boundaries. Previously returned frames keep their old generation. Cancellation can reference the application's stop flag. A separate interrupt serial permits a new seek to interrupt blocked reads without permanently cancelling the session. Remote elementary MPEG audio uses coarse byte/duration seeking so a distant seek does not scan a missing download prefix; VBR timestamps are approximate on that path. Local MPEG audio retains accurate scanning. HTTP uses bounded request deadlines and Range resume with byte-offset validation. Remote probing omits optional trailing APE/ID3v1 scans, so cache-backed playback can open using available headers instead of waiting for the file tail; local probing retains those metadata readers.
 
 ## Native implementations
+
+Android keeps the same independent graph contracts, using MediaExtractor, MediaCodec, MediaMuxer and ImageDecoder/Bitmap/Canvas through optional JNI capability packs. The core does not link JNI. Source-rate playback and channel conversion need no third-party DSP; offline sample-rate changes use a separately removable standalone SpeexDSP plugin and are rejected by SystemOnly. Android has CPU NV12 output and a narrower first-version source/profile contract; unlike desktop demuxers, MediaExtractor does not expose DTS. See [Android scope and integration](android.md) for boundaries, ownership and certification.
 
 System audio uses AudioConverter on macOS and synchronous MFTs on Windows, with independent PCM conversion and resampling nodes. Compressed packets remain distinct from decoded samples. The AVFoundation / MF Source Reader adapters output native compressed types and preserve decoder configuration; current system sources accept complete local files. HTTP/Range/progressive sources and container gaps use the separate Symphonia compatibility demux; that pack does not register audio decoders. Codec selection queries installed capabilities before graph creation. Unsupported profiles, corrupt input, cancellation and budget failures are never handled by arbitrary decoder retries.
 

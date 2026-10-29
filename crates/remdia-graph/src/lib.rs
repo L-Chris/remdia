@@ -26,8 +26,17 @@ struct CancelState {
     external: Option<Arc<AtomicBool>>,
     requested: Option<Arc<AtomicU64>>,
     active_generation: AtomicU64,
+    control: Option<Control>,
 }
 impl Cancellation {
+    /// # Safety
+    /// The callback context must remain live through all jobs and retained tokens.
+    pub unsafe fn from_control(control: Control) -> Self {
+        Self(Arc::new(CancelState {
+            control: Some(control),
+            ..Default::default()
+        }))
+    }
     pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
         Self(Arc::new(CancelState {
             external: Some(flag),
@@ -49,7 +58,10 @@ impl Cancellation {
         self.0.cancel.store(true, Ordering::Release);
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0.cancel.load(Ordering::Acquire)
+        self.0
+            .control
+            .is_some_and(|c| unsafe { (c.0.cancelled)(c.0.context) } == 1)
+            || self.0.cancel.load(Ordering::Acquire)
             || self
                 .0
                 .external
@@ -65,6 +77,12 @@ impl Cancellation {
             .store(self.0.serial.load(Ordering::Acquire), Ordering::Release);
     }
     pub fn poll(&self) -> u8 {
+        if let Some(control) = self.0.control {
+            let status = unsafe { (control.0.cancelled)(control.0.context) };
+            if status != 0 {
+                return if status == 2 { 2 } else { 1 };
+            }
+        }
         if self.is_cancelled() {
             1
         } else if self.0.requested.as_ref().is_some_and(|requested| {

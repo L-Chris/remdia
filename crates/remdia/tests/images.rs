@@ -3,8 +3,15 @@ use remdia::image::{Image, ImageInput, ImageOperation as Op, ImageRequest};
 use remdia::{Cancellation, Engine, FrameInfo, MediaRequest};
 use serde_json::json;
 
+fn load_engine(directory: impl AsRef<std::path::Path>, budget: usize) -> anyhow::Result<Engine> {
+    if cfg!(feature = "builtin-system") {
+        Engine::bundled_with_plugins(directory, budget)
+    } else {
+        Engine::discover(directory, budget)
+    }
+}
 fn engine() -> Engine {
-    Engine::discover(
+    load_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").expect("staged plugins"),
         128 * 1024 * 1024,
     )

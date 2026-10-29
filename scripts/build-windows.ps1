@@ -4,10 +4,14 @@ Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
     . ./scripts/setup-windows.ps1
     $profile = if ($Release) { 'release' } else { 'debug' }
-    $buildArgs = @('build', '--workspace', '--locked')
+    $buildArgs = @('build', '-p', 'remdia-sdk', '--locked')
     if ($Release) { $buildArgs += '--release' }
     & cargo @buildArgs
     if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    $cliArgs = @('build', '-p', 'remdia-cli', '--no-default-features', '--locked')
+    if ($Release) { $cliArgs += '--release' }
+    & cargo @cliArgs
+    if ($LASTEXITCODE -ne 0) { throw 'CLI build failed.' }
     if (Test-Path 'dist/remdia') { Remove-Item 'dist/remdia' -Recurse -Force }
     python scripts/stage.py --profile $profile
     if ($LASTEXITCODE -ne 0) { throw 'Stage failed.' }

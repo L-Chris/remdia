@@ -1,7 +1,15 @@
-#![cfg_attr(not(any(windows, target_os = "macos")), allow(unused_mut))]
+#![cfg_attr(
+    not(any(windows, target_os = "macos", target_os = "android")),
+    allow(unused_mut)
+)]
 use anyhow::{Result, bail, ensure};
 use remdia_graph::PlaneOwner;
 use std::{ffi::CString, ptr};
+#[cfg(target_os = "android")]
+#[path = "android.rs"]
+mod android;
+#[cfg(target_os = "android")]
+use android::*;
 
 #[repr(C)]
 pub struct Probe {
@@ -91,9 +99,9 @@ pub fn probe(bytes: &[u8]) -> Result<Probe> {
         orientation: 0,
         format: [0; 64],
     };
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "android"))]
     status(unsafe { rm_image_probe(bytes.as_ptr(), bytes.len(), &mut out) })?;
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
     {
         let _ = bytes;
         status(1)?;
@@ -113,7 +121,7 @@ impl Pixels {
         limit: usize,
     ) -> Result<Self> {
         let mut out = Self::default();
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "android"))]
         status(unsafe {
             rm_image_decode(
                 bytes.as_ptr(),
@@ -125,7 +133,7 @@ impl Pixels {
                 &mut out,
             )
         })?;
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
         {
             let _ = (bytes, maxw, maxh, maxpixels, limit);
             status(1)?;
@@ -142,7 +150,7 @@ impl Pixels {
     ) -> Result<Self> {
         info.validate(bytes)?;
         let mut out = Self::default();
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "android"))]
         status(unsafe {
             rm_image_scale(
                 bytes.as_ptr(),
@@ -155,7 +163,7 @@ impl Pixels {
                 &mut out,
             )
         })?;
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
         {
             let _ = (w, h, limit);
             status(1)?;
@@ -172,7 +180,7 @@ impl Pixels {
     ) -> Result<Self> {
         info.validate(bytes)?;
         let mut out = Self::default();
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "android"))]
         status(unsafe {
             rm_image_encode(
                 bytes.as_ptr(),
@@ -185,7 +193,7 @@ impl Pixels {
                 &mut out,
             )
         })?;
-        #[cfg(not(any(windows, target_os = "macos")))]
+        #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
         {
             let _ = (jpeg, quality, limit);
             status(1)?;
@@ -215,7 +223,7 @@ impl PlaneOwner for Pixels {
 }
 impl Drop for Pixels {
     fn drop(&mut self) {
-        #[cfg(any(windows, target_os = "macos"))]
+        #[cfg(any(windows, target_os = "macos", target_os = "android"))]
         unsafe {
             rm_image_free(self)
         }
@@ -225,9 +233,9 @@ pub fn supports(format: &str, encode: bool) -> bool {
     let Ok(format) = CString::new(format) else {
         return false;
     };
-    #[cfg(any(windows, target_os = "macos"))]
+    #[cfg(any(windows, target_os = "macos", target_os = "android"))]
     return unsafe { rm_image_supports(format.as_ptr(), i32::from(encode)) != 0 };
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
     {
         let _ = (format, encode);
         false

@@ -10,6 +10,7 @@ pub struct Plan {
     pub managed_budget_bytes: usize,
     pub notes: Vec<String>,
 }
+
 impl Plan {
     pub fn structure(registry: &Registry, request: &Request, budget: usize) -> Result<Self> {
         request.validate()?;
@@ -68,6 +69,7 @@ impl Plan {
                     match std::env::consts::OS {
                         "windows" => "windows.video.decode".to_owned(),
                         "macos" => "macos.video.decode".to_owned(),
+                        "android" => "android.video.decode".to_owned(),
                         os => anyhow::bail!("no default video decoder for {os}"),
                     }
                 } else {
@@ -88,13 +90,39 @@ impl Plan {
                     Some(track.index as u32),
                 ));
                 if track.kind == "audio" {
-                    let filter = format!("audio_{}", track.index);
+                    let rate = if request.audio_rate == 0 {
+                        track.sample_rate
+                    } else {
+                        request.audio_rate
+                    };
                     ensure!(
-                        audio_caps["resample"] == true,
-                        "system resampler capability pack is unavailable"
+                        (8000..=192000).contains(&rate),
+                        "invalid source sample rate"
                     );
-                    let resample = format!("{}.audio.resample", std::env::consts::OS);
-                    nodes.push(NodeSpec {id:filter.clone(),config:NodeConfig {component:resample,settings:json!({"rate":request.audio_rate,"channels":request.audio_channels})}});
+                    let filter = format!("audio_{}", track.index);
+                    let resample = if audio_caps["resample"] == true {
+                        format!("{}.audio.resample", std::env::consts::OS)
+                    } else if audio_caps["pcm_convert"] == "android.audio.convert" {
+                        let changes_rate = track.sample_rate != rate;
+                        ensure!(
+                            !changes_rate || request.policy != ProviderPolicy::SystemOnly,
+                            "Android has no public offline system resampler; SystemOnly requires the source sample rate"
+                        );
+                        if changes_rate {
+                            "fallback.audio.resample".into()
+                        } else {
+                            "android.audio.convert".into()
+                        }
+                    } else {
+                        anyhow::bail!("system resampler capability pack is unavailable")
+                    };
+                    nodes.push(NodeSpec {
+                        id: filter.clone(),
+                        config: NodeConfig {
+                            component: resample,
+                            settings: json!({"rate":rate,"channels":request.audio_channels}),
+                        },
+                    });
                     edges.push(EdgeSpec::between(id, filter, None));
                 } else if request.task == Task::Thumbnail {
                     nodes.push(NodeSpec {
@@ -130,5 +158,55 @@ impl Plan {
             }
         }
         Ok(Self {task:request.task,graph:GraphSpec {nodes,edges},managed_budget_bytes:budget,notes:vec!["Independent demux, decoder and filter factories; compatible nodes can come from different DLLs".into(),"Per-stream routing; compressed packets are not forced through a decoder".into()]})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use remdia_types::{Rational, Track};
+
+    #[test]
+    fn android_native_rate_avoids_optional_src() {
+        let media = MediaInfo {
+            container: "flac".into(),
+            duration_us: None,
+            origin_us: 0,
+            metadata: Default::default(),
+            tracks: vec![Track {
+                index: 0,
+                kind: "audio".into(),
+                codec: "flac".into(),
+                time_base: Rational::MICROS,
+                width: 0,
+                height: 0,
+                sample_rate: 44100,
+                channels: 2,
+                attached_picture: false,
+                metadata: Default::default(),
+                initialization: json!({}),
+            }],
+        };
+        let caps =
+            json!({"decode":["flac"], "resample":false, "pcm_convert":"android.audio.convert"});
+        let mut request = Request::playback("source.flac");
+        request.audio_rate = 0;
+        request.policy = ProviderPolicy::SystemOnly;
+        request.validate().unwrap();
+        let plan = Plan::for_media(&request, &media, 96 << 20, "android.demux", &caps).unwrap();
+        assert_eq!(
+            plan.graph.nodes[2].config.component,
+            "android.audio.convert"
+        );
+        assert_eq!(plan.graph.nodes[2].config.settings["rate"], 44100);
+        request.audio_rate = 16000;
+        assert!(Plan::for_media(&request, &media, 96 << 20, "android.demux", &caps).is_err());
+        request.policy = ProviderPolicy::SystemPreferred;
+        let plan = Plan::for_media(&request, &media, 96 << 20, "android.demux", &caps).unwrap();
+        assert_eq!(
+            plan.graph.nodes[2].config.component,
+            "fallback.audio.resample"
+        );
+        assert_eq!(plan.graph.nodes[2].config.settings["rate"], 16000);
     }
 }

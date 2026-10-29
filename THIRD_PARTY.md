@@ -8,8 +8,20 @@ The foundation (`native`) and system audio/image/demux packs contain no bundled
 media decoder, resampler or image codec implementation. Platform frameworks
 are supplied by the operating system and are not redistributed.
 
-Separately replaceable compatibility packs use:
+Compatibility components use the following sources. The bundled SDK links its
+selected system/utility components together; macOS LAME remains an independent
+replaceable library. Static registration changes neither source provenance nor
+the required license notices. See `docs/linking.md` for distribution layouts.
 
+- **SpeexDSP 1.2.1 standalone resampler (BSD-3-Clause)**,
+  https://github.com/xiph/speexdsp/tree/1b28a0f61bc31162979e1f26f3981fc3637095c8 :
+  Android's optional `fallback_resample` includes only the unmodified standalone
+  SRC and two required headers, with private symbol names. It is statically
+  registered into the unified Android SDK when enabled. No Speex audio codec,
+  echo canceller or jitter buffer is built. The complete license and exact source
+  provenance are in `plugins/fallback-resample/vendor/`. The Android AAR includes
+  the license; the `--system-only` AAR omits this plugin. Windows/macOS packages
+  retain their existing system SRC and do not ship this compatibility pack.
 - **Symphonia 0.6.1 (MPL-2.0)**, https://github.com/pdeljanov/Symphonia :
   `fallback_demux` registers format/metadata readers only, for unsupported
   source/container profiles including the existing HTTP/Range adapter. ADTS,
@@ -37,8 +49,11 @@ Separately replaceable compatibility packs use:
   parameter-set parsing and conservative decoded-picture reorder bounds. These
   are header parsers; VideoToolbox performs video decoding.
 
-Rubato, libopus and the libopus adapter have been removed. Audio resampling and
-Opus decoding use the system APIs. Apple AudioToolbox, AVFoundation, VideoToolbox,
+Rubato, libopus and the libopus adapter have been removed. Windows/macOS audio
+resampling and all supported platforms' Opus decoding use system APIs.
+Android media and images use public framework APIs through a JNI bridge;
+JNI/libc crates provide bindings, not codec implementations.
+Apple AudioToolbox, AVFoundation, VideoToolbox,
 ImageIO/CoreGraphics and Windows Media Foundation/WIC retain their platform
 terms; installed optional codecs may have additional terms.
 

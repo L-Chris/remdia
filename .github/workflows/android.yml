@@ -1,0 +1,103 @@
+name: Android system media
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-linux-android,x86_64-linux-android
+      - name: Install pinned Android tools
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          subprocess.run(['sdkmanager', 'ndk;28.2.13676358', 'platforms;android-35', 'build-tools;35.0.0'], input='y\n'*100, text=True, check=True)
+          PY
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - name: Build both Android ABIs
+        run: python3 scripts/build-android.py --clippy
+      - name: Audit native dependencies and 16 KB alignment
+        run: python3 scripts/audit-android.py --aar dist/android/remdia-0.3.0.aar
+      - name: Package system-only configuration
+        run: python3 scripts/build-android.py --system-only
+      - name: Audit system-only configuration
+        run: python3 scripts/audit-android.py --aar dist/android/remdia-0.3.0-system-only.aar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: remdia-android
+          path: dist/android/*
+          if-no-files-found: error
+  device:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 28
+            target: google_apis
+            page_size: 4096
+          - api: 35
+            target: google_apis
+            page_size: 4096
+          - api: 35
+            target: google_apis_ps16k
+            page_size: 16384
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/download-artifact@v4
+        with:
+          name: remdia-android
+          path: dist/android
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          script: python3 scripts/test-android.py --aar dist/android/remdia-0.3.0.aar --serial emulator-5554 --abi x86_64 --expected-page-size ${{ matrix.page_size }}
+      - name: Preserve full package report
+        run: cp target/android/smoke/device-emulator-5554/report.json target/android/full-report.json
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          script: python3 scripts/test-android.py --aar dist/android/remdia-0.3.0-system-only.aar --serial emulator-5554 --abi x86_64 --expected-page-size ${{ matrix.page_size }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-${{ matrix.api }}-${{ matrix.target }}-report
+          path: |
+            target/android/full-report.json
+            target/android/smoke/**/report.json

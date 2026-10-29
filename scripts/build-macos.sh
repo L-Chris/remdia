@@ -16,9 +16,13 @@ case "$target" in
   x86_64-apple-darwin) arch=x86_64 ;;
   *) echo "Unsupported macOS target: $target" >&2; exit 2 ;;
 esac
-args=(build --workspace --locked --target "$target")
+args=(build -p remdia-sdk -p remdia-backend-fallback-mp3-lame --locked --target "$target")
 if [[ $profile == release ]]; then args+=(--release); fi
 cargo "${args[@]}"
+# Keep the diagnostic executable thin; the standalone SDK holds its components.
+cli=(build -p remdia-cli --no-default-features --locked --target "$target")
+if [[ $profile == release ]]; then cli+=(--release); fi
+cargo "${cli[@]}"
 python3 - <<'PY'
 import shutil
 shutil.rmtree('dist/remdia', ignore_errors=True)

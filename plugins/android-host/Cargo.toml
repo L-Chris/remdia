@@ -1,0 +1,19 @@
+[package]
+name = "remdia-android-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+bundled = ["remdia/bundled"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+remdia.workspace = true
+remdia-android-platform = { path = "../../crates/remdia-android-platform" }
+jni = { version = "0.21.1", default-features = false }

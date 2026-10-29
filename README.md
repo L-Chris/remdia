@@ -4,12 +4,21 @@
 
 0.3 开发版优先使用 Windows Media Foundation / WIC 和 macOS AudioToolbox / AVFoundation / VideoToolbox / ImageIO / CoreGraphics。核心不链接媒体编解码库或平台框架；系统适配在独立能力包里。
 
+默认发行使用统一链接：Rust 应用启用 `bundled` 将内置工厂直接链接进主程序，独立 SDK 输出一个原生库。工厂和插件图继续独立，外部 ABI 插件仍可加载；macOS LAME 保持独立扩展。[链接方式、裁剪与 C SDK 接口](docs/linking.md)。
+
+Android 9 / API 28+ 已接入同一组件图：系统 MediaExtractor、MediaCodec、MediaMuxer、ImageDecoder/Bitmap，支持 `arm64-v8a` 与 `x86_64`。AAR 每 ABI 一个原生库及薄 Java/JNI 门面；最小核心仍无 JNI 或 Android 媒体框架依赖。默认 AAR 为离线 PCM 变采样包含可选 SpeexDSP SRC 工厂，`--system-only` 在编译时排除。Android 不附带音视频或图片解码器，也不附带 MP3 encoder。[构建、API、能力边界与验证](docs/android.md)。
+
 ## 系统优先
 
 ```text
+Windows / macOS:
 本地文件 → 系统 demux ─┬→ 系统 audio.decode → 系统 audio.resample → f32 PCM
                        └→ 系统 video.decode → CPU NV12 → renderer
 HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/filter
+
+Android:
+本地/content URI/fd → 系统 demux → 系统 decoder → 原采样率 PCM / CPU NV12
+改变采样率时 → 可选 standalone SRC；SystemOnly 拒绝此转换
 
 文件/共享字节 → image.decode → scale/crop/alpha/orient/tile/compose → image.encode
 视频解码帧 → native.video.rgba → image.from_video → image.scale → image.encode
@@ -23,11 +32,13 @@ HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/
 | `system_demux` | `windows.demux` / `macos.demux`，输出压缩包；本地完整文件，包括无正确扩展名的临时文件 |
 | `system_audio` | 系统音频解码、流式重采样/声道矩阵；Windows 另提供独立 MP3 MFT encoder |
 | `windows` / `macos` | 独立视频解码；Windows 同步软件 MFT，macOS VideoToolbox 硬解优先/软件模式 |
-| `image` | WIC 或 ImageIO/CoreGraphics 的 probe/decode/scale/crop/alpha/orient/tile/compose/encode 工厂 |
+| `android` | MediaExtractor、MediaCodec、MediaMuxer；独立 demux、音视频 decoder、PCM convert、AAC encoder、mux |
+| `image` | WIC、ImageIO/CoreGraphics 或 Android ImageDecoder/Bitmap 的 probe/decode/scale/crop/alpha/orient/tile/compose/encode 工厂 |
 | `fallback_demux` | Symphonia 仅用于系统容器缺口及现有 HTTP/Range/渐进 source 适配；不注册音频 decoder |
 | `fallback_mp3_lame` | 仅 macOS，默认系统没有 MP3 encoder；Windows 使用系统 MFT + 独立 gapless mux |
+| `fallback_resample` | Android 可选离线 SRC，standalone SpeexDSP；纯系统 AAR 不含该库 |
 
-已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。WebP 仅使用 WIC / ImageIO；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
+已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 走系统 decoder。WebP 仅使用 WIC / ImageIO / Android ImageDecoder；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
 
 Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；MPA decoder 功能开关已关闭，AAC/FLAC 仍编译上游 decoder 模块，本包不注册或调用音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
 

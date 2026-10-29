@@ -19,10 +19,10 @@ const OPERATIONS: &[(&str, &str)] = &[
     ("capabilities", "source"),
 ];
 fn prefix() -> &'static str {
-    if cfg!(windows) { "windows" } else { "macos" }
+    std::env::consts::OS
 }
 fn descriptors() -> Vec<ComponentDescriptor> {
-    if !cfg!(any(windows, target_os = "macos")) {
+    if !cfg!(any(windows, target_os = "macos", target_os = "android")) {
         return Vec::new();
     }
     OPERATIONS
@@ -49,6 +49,8 @@ fn descriptors() -> Vec<ComponentDescriptor> {
         })
         .collect()
 }
+#[cfg(all(target_os = "android", not(feature = "builtin")))]
+remdia_android_platform::jni_on_load!();
 fn create(config: &NodeConfig, control: Control) -> Result<Box<dyn Component>> {
     let descriptor = descriptors()
         .into_iter()

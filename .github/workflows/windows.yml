@@ -69,7 +69,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke.exe
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./target/abi-smoke.exe "$PWD/dist/remdia/plugins/remdia_backend_fallback_demux.dll" "$PWD/target/fixtures/probe.json"
+          ./target/abi-smoke.exe "$PWD/dist/remdia/plugins/remdia_sdk.dll" "$PWD/target/fixtures/probe.json"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/test-sdk.py --library dist/remdia/plugins/remdia_sdk.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/network-smoke.py --exe dist/remdia/remdia.exe --fixtures target/fixtures
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

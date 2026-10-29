@@ -1,0 +1,32 @@
+{
+  "profile": "release",
+  "system_only": false,
+  "abis": {
+    "arm64-v8a": {
+      "build_seconds": 0.329,
+      "libraries": {
+        "libremdia_backend_native.so": 680680,
+        "libremdia_backend_android.so": 915432,
+        "libremdia_backend_image.so": 784208,
+        "libremdia_backend_fallback_resample.so": 594176,
+        "libremdia_android_host.so": 1035616
+      },
+      "native_bytes": 4010112
+    },
+    "x86_64": {
+      "build_seconds": 0.535,
+      "libraries": {
+        "libremdia_backend_native.so": 740912,
+        "libremdia_backend_android.so": 1011800,
+        "libremdia_backend_image.so": 860960,
+        "libremdia_backend_fallback_resample.so": 646704,
+        "libremdia_android_host.so": 1147752
+      },
+      "native_bytes": 4408128
+    }
+  },
+  "ndk": "28.2.13676358",
+  "aar_bytes": 3913400,
+  "total_seconds": 1.677,
+  "sha256": "5de18897c875bea3cb4ccab103f7bc9b2e0f8a368e6014943100cd6edaeba543"
+}

@@ -5,8 +5,15 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
+fn load_engine(directory: impl AsRef<std::path::Path>, budget: usize) -> anyhow::Result<Engine> {
+    if cfg!(feature = "builtin-system") {
+        Engine::bundled_with_plugins(directory, budget)
+    } else {
+        Engine::discover(directory, budget)
+    }
+}
 fn engine() -> Engine {
-    Engine::discover(
+    load_engine(
         std::env::var("REMDIA_TEST_PLUGIN_DIR").expect("set REMDIA_TEST_PLUGIN_DIR"),
         256 * 1024 * 1024,
     )
@@ -218,7 +225,7 @@ fn cancellation_budgets_and_invalid_input() {
     let mut s = open(&e, "audio.wav", Task::Audio);
     s.cancellation().cancel();
     assert!(s.read().is_err());
-    let small = Engine::discover(std::env::var("REMDIA_TEST_PLUGIN_DIR").unwrap(), 1024).unwrap();
+    let small = load_engine(std::env::var("REMDIA_TEST_PLUGIN_DIR").unwrap(), 1024).unwrap();
     assert!(small.plan(&Request::playback("x")).is_err());
     let mut r = Request::playback(fixture("broken.bin"));
     r.task = Task::Probe;

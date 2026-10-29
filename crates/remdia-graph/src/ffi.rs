@@ -123,6 +123,32 @@ unsafe fn input_buffer(raw: &Input) -> Result<MediaBuffer> {
 }
 pub type CreateFn = fn(&NodeConfig, Control) -> Result<Box<dyn Component>>;
 pub type DescribeFn = fn() -> Vec<ComponentDescriptor>;
+/// A statically linked pack uses the same factories and component contracts.
+#[derive(Clone, Copy, Debug)]
+pub struct BuiltinPlugin {
+    pub describe: DescribeFn,
+    pub create: CreateFn,
+}
+
+/// Reply ownership and panic containment shared by exported SDK operations.
+pub enum Reply {
+    Empty,
+    Json(Value),
+    Buffer(MediaBuffer),
+}
+/// # Safety
+/// `out` must be writable for an ABI Output. Output release may run on any thread.
+pub unsafe fn respond(out: *mut Output, operation: impl FnOnce() -> Result<(i32, Reply)>) -> i32 {
+    boundary(out, || {
+        let (status, reply) = operation()?;
+        let owned = match reply {
+            Reply::Empty => None,
+            Reply::Json(value) => Some(Owned::json(&value)?),
+            Reply::Buffer(value) => Some(Owned::buffer(value)?),
+        };
+        Ok((status, owned))
+    })
+}
 /// # Safety
 /// `config` and `out` obey the component ABI; `factory` returns a serial component.
 pub unsafe fn create(
@@ -254,6 +280,16 @@ pub unsafe fn query(
 #[macro_export]
 macro_rules! export_plugin {
     ($describe:path,$factory:path) => {
+        pub fn builtin_plugin() -> $crate::ffi::BuiltinPlugin {
+            $crate::ffi::BuiltinPlugin { describe: $describe, create: $factory }
+        }
+        #[cfg(not(feature = "builtin"))]
+        mod remdia_dynamic_exports {
+            use super::*;
+            $crate::export_plugin!(@dynamic $describe, $factory);
+        }
+    };
+    (@dynamic $describe:path,$factory:path) => {
         unsafe extern "C" fn component_describe(out: *mut remdia_plugin_abi::Output) -> i32 {
             unsafe { $crate::ffi::describe(out, $describe) }
         }

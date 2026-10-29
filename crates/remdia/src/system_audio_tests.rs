@@ -8,7 +8,7 @@ use crate::{
 use serde_json::json;
 
 fn engine() -> Engine {
-    Engine::discover(
+    crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").expect("staged system audio plugins"),
         128 * 1024 * 1024,
     )

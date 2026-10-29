@@ -1,13 +1,15 @@
 #![cfg(any(windows, target_os = "macos"))]
+#[cfg(target_os = "macos")]
+use crate::Engine;
 use crate::graph::{EdgeSpec, Factory, Graph, NodeConfig};
 use crate::registry::TrustedFactory;
-use crate::{Cancellation, Engine, FrameInfo, GraphEvent, Request};
+use crate::{Cancellation, FrameInfo, GraphEvent, Request};
 use serde_json::json;
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "requires staged system media plugins"]
 fn compressed_system_demux_decodes_and_replays_after_eof() {
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
@@ -96,7 +98,7 @@ fn compressed_system_demux_decodes_and_replays_after_eof() {
 #[test]
 #[ignore = "requires staged Windows system media plugins"]
 fn windows_source_reader_keeps_compressed_video_separate_from_decode() {
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
@@ -164,13 +166,18 @@ fn windows_source_reader_keeps_compressed_video_separate_from_decode() {
 #[test]
 #[ignore = "requires staged system media plugins"]
 fn system_only_playback_does_not_require_a_compatibility_pack() {
-    let mut engine = Engine::discover(
+    let mut engine = Engine::bundled_with_plugins(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
     .unwrap();
     engine.registry.candidates.retain(|candidate| {
-        candidate.manifest.id != "native" && !candidate.manifest.id.starts_with("fallback_")
+        let id = candidate
+            .manifest
+            .id
+            .strip_prefix("builtin.")
+            .unwrap_or(&candidate.manifest.id);
+        id != "native" && id != "sdk" && !id.starts_with("fallback_")
     });
     let source =
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/av.mp4");
@@ -207,7 +214,7 @@ fn system_only_playback_does_not_require_a_compatibility_pack() {
 #[test]
 #[ignore = "requires staged system media plugins"]
 fn system_file_source_uses_content_instead_of_temporary_file_extension() {
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
@@ -232,7 +239,7 @@ fn system_file_source_uses_content_instead_of_temporary_file_extension() {
 #[test]
 #[ignore = "requires staged system media plugins"]
 fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
@@ -280,7 +287,7 @@ fn system_lossless_source_seeks_to_last_partial_block_and_replays() {
 #[test]
 #[ignore = "requires staged plugins and generated long FLAC fixtures"]
 fn system_long_flac_seek_preserves_samples_and_rapid_reset_generations() {
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )
@@ -405,7 +412,7 @@ fn system_flac_seek_decodes_only_target_packets() {
             self.inner.command(command)
         }
     }
-    let engine = Engine::discover(
+    let engine = crate::test_engine(
         std::env::var_os("REMDIA_TEST_PLUGIN_DIR").unwrap(),
         128 * 1024 * 1024,
     )

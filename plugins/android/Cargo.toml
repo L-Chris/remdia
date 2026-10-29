@@ -1,0 +1,22 @@
+[package]
+name = "remdia-backend-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Static registration keeps factory symbols private inside the host.
+builtin = []
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+remdia-graph.workspace = true
+remdia-plugin-abi.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+remdia-android-platform = { path = "../../crates/remdia-android-platform" }

@@ -80,7 +80,11 @@ fn main() -> Result<()> {
             .context("executable directory")?
             .join("plugins"),
     );
-    let engine = Engine::discover(
+    #[cfg(feature = "bundled")]
+    let construct = Engine::bundled_with_plugins;
+    #[cfg(not(feature = "bundled"))]
+    let construct = Engine::discover;
+    let engine = construct(
         directory,
         args.budget_mib
             .checked_mul(1024 * 1024)
@@ -153,9 +157,17 @@ fn main() -> Result<()> {
         return Ok(());
     }
     if matches!(args.command, Command::Plugins) {
-        for c in &engine.registry().candidates {
-            println!("{}", serde_json::to_string_pretty(&c.manifest)?);
-        }
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &engine
+                    .registry()
+                    .candidates
+                    .iter()
+                    .map(|c| &c.manifest)
+                    .collect::<Vec<_>>()
+            )?
+        );
         return Ok(());
     }
     if let Command::Graph { file } = args.command {

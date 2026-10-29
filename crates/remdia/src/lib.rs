@@ -1,4 +1,5 @@
 //! FFmpeg-free modular media SDK; the playback facade runs the same public DAG.
+pub mod builtin;
 pub mod image;
 mod jobs;
 pub mod plan;
@@ -22,6 +23,10 @@ use std::{
 #[derive(Clone)]
 pub struct Frame(MediaBuffer);
 impl Frame {
+    pub fn from_buffer(buffer: MediaBuffer) -> Result<Self> {
+        buffer.validate()?;
+        Ok(Self(buffer))
+    }
     pub fn info(&self) -> &FrameInfo {
         &self.0.header.info
     }
@@ -42,7 +47,21 @@ pub struct Engine {
     registry: Registry,
     budget: Budget,
 }
+#[cfg(all(test, any(windows, target_os = "macos")))]
+fn test_engine(directory: impl AsRef<Path>, budget: usize) -> Result<Engine> {
+    if cfg!(feature = "builtin-system") {
+        Engine::bundled_with_plugins(directory, budget)
+    } else {
+        Engine::discover(directory, budget)
+    }
+}
 impl Engine {
+    pub fn from_registry(registry: Registry, managed_budget_bytes: usize) -> Self {
+        Self {
+            registry,
+            budget: Budget::new(managed_budget_bytes),
+        }
+    }
     fn capability_value(
         &self,
         component: &str,
@@ -117,18 +136,77 @@ impl Engine {
             budget: Budget::new(managed_budget_bytes),
         })
     }
+    pub fn bundled(managed_budget_bytes: usize) -> Result<Self> {
+        Ok(Self {
+            registry: Registry::bundled()?,
+            budget: Budget::new(managed_budget_bytes),
+        })
+    }
+    /// Builtins have priority; additional trusted packs may add component IDs.
+    pub fn bundled_with_plugins(
+        directory: impl AsRef<Path>,
+        managed_budget_bytes: usize,
+    ) -> Result<Self> {
+        let mut engine = Self::bundled(managed_budget_bytes)?;
+        if directory.as_ref().try_exists()? {
+            engine.registry.extend(Registry::discover(directory)?)?;
+        }
+        Ok(engine)
+    }
+    /// # Safety
+    /// Additional manifests must identify trusted libraries already loaded by the host.
+    pub unsafe fn bundled_with_preloaded(
+        manifests: Vec<registry::Manifest>,
+        managed_budget_bytes: usize,
+    ) -> Result<Self> {
+        let mut engine = Self::bundled(managed_budget_bytes)?;
+        engine
+            .registry
+            .extend(unsafe { Registry::preloaded(manifests)? })?;
+        Ok(engine)
+    }
+    /// # Safety
+    /// Every library named by the manifests must be trusted and preloaded.
+    pub unsafe fn from_preloaded(
+        manifests: Vec<registry::Manifest>,
+        managed_budget_bytes: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            registry: unsafe { Registry::preloaded(manifests)? },
+            budget: Budget::new(managed_budget_bytes),
+        })
+    }
+    /// Open a caller-owned seekable descriptor without transferring its ownership.
+    /// The Android provider duplicates the descriptor synchronously during open.
+    /// # Safety
+    /// Installed capability packs must be trusted and obey the plugin ABI.
+    #[cfg(target_os = "android")]
+    pub unsafe fn open_fd(
+        &self,
+        mut request: Request,
+        fd: std::os::fd::BorrowedFd<'_>,
+        offset: u64,
+        length: Option<u64>,
+        cancel: Cancellation,
+    ) -> Result<Session> {
+        use std::os::fd::AsRawFd;
+        ensure!(
+            offset <= i64::MAX as u64 && length.is_none_or(|n| n > 0 && n <= i64::MAX as u64),
+            "invalid file descriptor range"
+        );
+        let owned = fd.try_clone_to_owned()?;
+        request.source = format!("fd://{}?offset={offset}", owned.as_raw_fd());
+        if let Some(length) = length {
+            request.source.push_str(&format!("&length={length}"));
+        }
+        unsafe { self.open(request, cancel) }
+    }
     pub fn encode_mp3(&self, samples: &[f32]) -> Result<Frame> {
         self.encode_mp3_with_policy(samples, ProviderPolicy::SystemPreferred)
     }
     pub fn encode_mp3_with_policy(&self, samples: &[f32], policy: ProviderPolicy) -> Result<Frame> {
-        let directory = self
-            .registry
-            .candidates
-            .first()
-            .and_then(|c| c.path.parent())
-            .context("no capability packs installed")?;
         encode_pcm_mp3(
-            directory,
+            &self.registry,
             &self.budget,
             Cancellation::default(),
             1,
@@ -243,18 +321,12 @@ impl Engine {
             target_us: 0,
             at_end: false,
             budget: self.budget.clone(),
-            registry_dir: self
-                .registry
-                .candidates
-                .first()
-                .and_then(|c| c.path.parent())
-                .map(Path::to_path_buf)
-                .context("missing registry directory")?,
+            registry: self.registry.clone(),
         })
     }
 }
 fn encode_pcm_mp3(
-    directory: &Path,
+    registry: &Registry,
     budget: &Budget,
     cancel: Cancellation,
     generation: u64,
@@ -266,9 +338,8 @@ fn encode_pcm_mp3(
         "invalid MP3 chunk"
     );
     cancel.begin();
-    let registry = Registry::discover(directory)?;
     let engine = Engine {
-        registry,
+        registry: registry.clone(),
         budget: budget.clone(),
     };
     let caps = engine.capability_value(
@@ -405,7 +476,7 @@ pub struct Session {
     target_us: i64,
     at_end: bool,
     budget: Budget,
-    registry_dir: std::path::PathBuf,
+    registry: Registry,
 }
 impl Session {
     pub fn info(&self) -> &MediaInfo {
@@ -571,7 +642,7 @@ impl Session {
     }
     pub fn encode_mp3(&self, chunk: &AudioChunk) -> Result<Frame> {
         encode_pcm_mp3(
-            &self.registry_dir,
+            &self.registry,
             &self.budget,
             self.cancel.clone(),
             self.generation(),

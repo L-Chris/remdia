@@ -3,14 +3,14 @@
 import subprocess
 import sys
 
-listing = subprocess.check_output(['cargo', 'test', '-p', 'remdia', '--lib', '--locked', '--', '--list'], text=True)
+listing = subprocess.check_output(['cargo', 'test', '-p', 'remdia', '--features', 'bundled', '--lib', '--locked', '--', '--list'], text=True)
 names = [line.removesuffix(': test') for line in listing.splitlines()
          if line.endswith(': test') and line.startswith(('system_audio_tests::', 'system_demux_tests::'))]
 failures = []
 for name in names:
     print(f'Certifying {name}', flush=True)
     try:
-        result = subprocess.run(['cargo', 'test', '-p', 'remdia', '--lib', '--locked', name,
+        result = subprocess.run(['cargo', 'test', '-p', 'remdia', '--features', 'bundled', '--lib', '--locked', name,
                                  '--', '--exact', '--include-ignored', '--nocapture'],
                                 text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
         print(result.stdout, flush=True)

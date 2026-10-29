@@ -281,9 +281,8 @@ impl Component for FileSink {
         if !self.ended {
             self.file.as_ref().unwrap().sync_all()?;
             self.file = None;
-            std::fs::hard_link(&self.temporary, &self.destination)
+            publish(&self.temporary, &self.destination)
                 .context("publish output without overwriting destination")?;
-            std::fs::remove_file(&self.temporary)?;
             self.ended = true;
         }
         Ok(())
@@ -291,4 +290,34 @@ impl Component for FileSink {
     fn reset(&mut self, _g: u64, _t: i64) -> Result<()> {
         anyhow::bail!("file sink cannot seek an active export graph")
     }
+}
+
+#[cfg(not(target_os = "android"))]
+fn publish(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    std::fs::hard_link(source, destination)?;
+    std::fs::remove_file(source)?;
+    Ok(())
+}
+#[cfg(target_os = "android")]
+fn publish(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+    let source = std::ffi::CString::new(source.as_os_str().as_bytes())?;
+    let destination = std::ffi::CString::new(destination.as_os_str().as_bytes())?;
+    // Android app SELinux policy disallows hard links. renameat2(NOREPLACE)
+    // preserves atomic publication and the no-overwrite guarantee. The public
+    // bionic wrapper starts at API 30; the kernel syscall exists on API 28.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    Ok(())
 }

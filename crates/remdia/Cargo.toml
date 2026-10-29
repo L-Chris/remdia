@@ -5,6 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+# The minimal core remains platform independent. Consumers opt into builtins.
+bundled = ["builtin-system", "builtin-compat-demux"]
+builtin-system = ["dep:remdia-backend-native", "dep:remdia-backend-image", "dep:remdia-backend-system-audio", "dep:remdia-backend-system-demux", "dep:remdia-backend-windows", "dep:remdia-backend-macos", "dep:remdia-backend-android"]
+builtin-compat-demux = ["dep:remdia-backend-fallback-demux"]
+builtin-src = ["dep:remdia-backend-fallback-resample"]
+
 [dependencies]
 anyhow.workspace = true
 serde.workspace = true
@@ -14,3 +22,22 @@ remdia-types.workspace = true
 remdia-buffer.workspace = true
 remdia-plugin-abi.workspace = true
 remdia-graph.workspace = true
+remdia-backend-native = { path = "../../plugins/native", optional = true, features = ["builtin"] }
+
+[target.'cfg(any(windows, target_os = "macos", target_os = "android"))'.dependencies]
+remdia-backend-image = { path = "../../plugins/image", optional = true, features = ["builtin"] }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+remdia-backend-system-audio = { path = "../../plugins/system-audio", optional = true, features = ["builtin"] }
+remdia-backend-system-demux = { path = "../../plugins/system-demux", optional = true, features = ["builtin"] }
+remdia-backend-fallback-demux = { path = "../../plugins/fallback-demux", optional = true, features = ["builtin"] }
+
+[target.'cfg(windows)'.dependencies]
+remdia-backend-windows = { path = "../../plugins/windows", optional = true, features = ["builtin"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+remdia-backend-macos = { path = "../../plugins/macos", optional = true, features = ["builtin"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+remdia-backend-android = { path = "../../plugins/android", optional = true, features = ["builtin"] }
+remdia-backend-fallback-resample = { path = "../../plugins/fallback-resample", optional = true, features = ["builtin"] }
