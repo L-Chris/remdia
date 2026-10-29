@@ -29,7 +29,7 @@ HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/
 
 已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。WebP 仅使用 WIC / ImageIO；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
 
-Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；本包不注册或调用其音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
+Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；MPA decoder 功能开关已关闭，AAC/FLAC 仍编译上游 decoder 模块，本包不注册或调用音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
 
 本地原生 FLAC 使用自有的压缩帧定位层，补齐 Windows Source Reader 返回任意字节块及 macOS 可变块定位的缺口；逐帧 CRC 校验，优先 SEEKTABLE，无表时二分搜索并维护有上限的稀疏索引。解码仍是独立 Windows MFT / AudioToolbox 节点，不引入第三方 codec，也不缓存整段 PCM。
 

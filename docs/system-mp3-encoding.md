@@ -56,9 +56,10 @@ Xing 帧数 / 字节数 / seek TOC 及带 CRC 的 LAME-compatible delay/padding 
 
 兼容 demux 直接注册所需 format / metadata reader，不依赖上游默认 codec registry。
 Vorbis decoder 已从 workspace 和 lockfile 移除。
-ADTS、FLAC、MPA reader 和 decoder 共享上游 crate，所以构建时仍会编译
-`symphonia-codec-aac`、`symphonia-bundle-flac`、`symphonia-bundle-mp3`。
-没有注册、创建或调用这些软件音频 decoder。
+ADTS、FLAC reader 和 decoder 共享上游 crate，所以构建时仍会编译
+`symphonia-codec-aac`、`symphonia-bundle-flac` 中的 decoder 模块。
+`symphonia-bundle-mp3` 仍提供 MPA reader，但已关闭 `mp1/mp2/mp3` decoder
+功能开关，只编译 demux 及共享辅助模块。没有注册、创建或调用软件音频 decoder。
 
 macOS ARM release 链接图检查显示 `AacDecoder`、`FlacDecoder`、`MpaDecoder`
 及 codec registry 的相关符号均不在保留段，decoder 实现被列在 dead-stripped 段。

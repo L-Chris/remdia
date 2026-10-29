@@ -14,7 +14,9 @@ Separately replaceable compatibility packs use:
   `fallback_demux` registers format/metadata readers only, for unsupported
   source/container profiles including the existing HTTP/Range adapter. ADTS,
   MPA and FLAC readers share upstream crates with decoder code, so those crates
-  remain in Cargo.lock; no audio decoder is registered or created in this pack.
+  remain in Cargo.lock. MPA's decoder features are disabled; AAC/FLAC still
+  compile their upstream decoder modules. No audio decoder is registered or
+  created in this pack.
   Vorbis software decoding is not included; unavailable system codecs are unsupported.
 - **mp3lame-encoder 0.2.5 / mp3lame-sys 0.1.11 (LGPL-3.0), LAME 3.100**,
   https://github.com/DoumanAsh/mp3lame-encoder and
