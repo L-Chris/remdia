@@ -1,0 +1,18 @@
+[package]
+name = "remdia-backend-fallback-mp3-lame"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+remdia-graph.workspace = true
+remdia-plugin-abi.workspace = true
+
+[target.'cfg(target_os="macos")'.dependencies]
+mp3lame-encoder = { version = "0.2.5", features = ["std"] }

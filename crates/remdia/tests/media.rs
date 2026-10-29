@@ -49,7 +49,10 @@ fn system_surround_audio_containers_drain_and_seek_through_the_public_graph() {
         let mut session = match unsafe { e.open(request, Cancellation::default()) } {
             Ok(session) => session,
             Err(error) if !name.starts_with("aac-") => {
-                assert!(format!("{error:#}").contains("system"));
+                assert!(
+                    format!("{error:#}").contains("system audio decoder unavailable"),
+                    "unexpected Dolby failure for {name}: {error:#}"
+                );
                 eprintln!("Optional system Dolby decoder unavailable for {name}: {error:#}");
                 continue;
             }
@@ -281,7 +284,7 @@ fn video_packets_cross_dlls_to_platform_decoder_and_seek() {
                 .graph
                 .nodes
                 .iter()
-                .any(|n| n.config.component == "native.demux")
+                .any(|n| n.config.component.ends_with(".demux"))
         );
         assert!(
             s.plan()
@@ -328,7 +331,7 @@ fn video_packets_cross_dlls_to_platform_decoder_and_seek() {
         t.seek(1000000).unwrap();
         let f = t.read().unwrap().unwrap();
         assert!(
-            matches!(f.info(),FrameInfo::Video {format,width:160,height:90,..} if format=="rgba"),
+            matches!(f.info(),FrameInfo::Image {image,..} if image.width==160 && image.height==90 && image.format=="rgba8"),
             "{name}: {:?}",
             f.info()
         );
@@ -346,7 +349,7 @@ fn compressed_video_seek_restores_a_preceding_random_access_packet_after_eof() {
             nodes: vec![NodeSpec {
                 id: "demux".into(),
                 config: NodeConfig {
-                    component: "native.demux".into(),
+                    component: "fallback.demux".into(),
                     settings: serde_json::to_value(request).unwrap(),
                 },
             }],
@@ -434,7 +437,7 @@ fn compressed_mp3_remux_graph_never_creates_a_decoder() {
             NodeSpec {
                 id: "demux".into(),
                 config: NodeConfig {
-                    component: "native.demux".into(),
+                    component: s.plan().graph.nodes[0].config.component.clone(),
                     settings: serde_json::to_value(request).unwrap(),
                 },
             },

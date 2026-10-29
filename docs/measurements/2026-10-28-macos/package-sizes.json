@@ -1,0 +1,25 @@
+{
+  "baseline": {
+    "binary_bytes": 8517824,
+    "archive_bytes": 4104302,
+    "files": {
+      "remdia": 1173552,
+      "libremdia_backend_macos.dylib": 718256,
+      "libremdia_backend_native.dylib": 6626016
+    }
+  },
+  "current": {
+    "binary_bytes": 10526336,
+    "archive_bytes": 4967028,
+    "files": {
+      "remdia": 1173552,
+      "libremdia_backend_fallback_demux.dylib": 5341664,
+      "libremdia_backend_fallback_mp3_lame.dylib": 729600,
+      "libremdia_backend_image.dylib": 601056,
+      "libremdia_backend_macos.dylib": 734688,
+      "libremdia_backend_native.dylib": 613584,
+      "libremdia_backend_system_audio.dylib": 646336,
+      "libremdia_backend_system_demux.dylib": 685856
+    }
+  }
+}

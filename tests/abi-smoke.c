@@ -33,6 +33,8 @@ int main(int argc, char **argv) {
     assert(query(header, &api) == REMDIA_ERROR);
     header.struct_size = sizeof(api);
     assert(query(header, &api) == REMDIA_ERROR); /* old host minor */
+    header.minor = REMDIA_ABI_MINOR - 1;
+    assert(query(header, &api) == REMDIA_ERROR); /* pre-image schema host */
     header.minor = REMDIA_ABI_MINOR;
     assert(query(header, &api) == REMDIA_OK);
     assert(api.header.major == REMDIA_ABI_MAJOR);

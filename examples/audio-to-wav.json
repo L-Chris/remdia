@@ -2,7 +2,7 @@
   "nodes": [
     {
       "id": "demux",
-      "component": "native.demux",
+      "component": "fallback.demux",
       "settings": {
         "source": "tests/fixtures/audio.wav",
         "task": "audio",
@@ -17,7 +17,7 @@
     },
     {
       "id": "decode",
-      "component": "native.audio.decode",
+      "component": "windows.audio.decode",
       "settings": {
         "track": {
           "index": 0,
@@ -56,7 +56,7 @@
     },
     {
       "id": "resample",
-      "component": "native.audio.resample",
+      "component": "windows.audio.resample",
       "settings": {
         "rate": 16000,
         "channels": 1

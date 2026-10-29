@@ -11,12 +11,30 @@ struct Args {
     budget_mib: usize,
     #[arg(long, global = true, default_value_t = 30_000)]
     timeout_ms: u64,
+    #[arg(long, global = true)]
+    system_only: bool,
     #[command(subcommand)]
     command: Command,
 }
 #[derive(Subcommand)]
 enum Command {
     Plugins,
+    /// Enumerate installed system image, audio and container capabilities.
+    Capabilities,
+    /// Run system image components through the shared media graph.
+    Image {
+        source: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        width: Option<u32>,
+        #[arg(long)]
+        height: Option<u32>,
+        #[arg(long)]
+        probe: bool,
+        #[arg(long)]
+        plan: bool,
+    },
     /// Execute a user-defined DAG of compatible component factories.
     Graph {
         file: PathBuf,
@@ -68,6 +86,72 @@ fn main() -> Result<()> {
             .checked_mul(1024 * 1024)
             .context("budget overflow")?,
     )?;
+    if matches!(args.command, Command::Capabilities) {
+        let capabilities = unsafe {
+            serde_json::json!({"image":engine.image_capabilities()?,"audio":engine.audio_capabilities()?,"demux":engine.demux_capabilities()?})
+        };
+        println!("{}", serde_json::to_string_pretty(&capabilities)?);
+        return Ok(());
+    }
+    if let Command::Image {
+        source,
+        output,
+        width,
+        height,
+        probe,
+        plan,
+    } = &args.command
+    {
+        use remdia::image::{ImageInput, ImageOperation as Op, ImageRequest};
+        let mut operations = vec![Op::new(
+            if *probe { "probe" } else { "decode" },
+            serde_json::json!({"max_width":width.unwrap_or(16384),"max_height":height.unwrap_or(65536)}),
+        )];
+        if let Some(output) = output {
+            ensure!(!probe, "probe cannot encode an output image");
+            let jpeg = output
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("jpg") || e.eq_ignore_ascii_case("jpeg"));
+            ensure!(
+                jpeg || output
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("png")),
+                "output must be PNG/JPEG"
+            );
+            if jpeg {
+                operations.push(Op::new(
+                    "alpha",
+                    serde_json::json!({"background":[255,255,255]}),
+                ))
+            }
+            operations.push(Op::new(
+                "encode",
+                serde_json::json!({"format":if jpeg {"jpeg"} else {"png"},"quality":0.95}),
+            ));
+        }
+        let mut request = ImageRequest::new(ImageInput::File(source.clone()), operations);
+        if args.system_only {
+            request.policy = remdia::ProviderPolicy::SystemOnly;
+        }
+        let request = remdia::MediaRequest::Image(request);
+        if *plan {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&unsafe { engine.explain_job(&request)? })?
+            );
+            return Ok(());
+        }
+        let mut job = unsafe { engine.open_job(request, Cancellation::default())? };
+        let frame = job.read()?.context("no image output")?;
+        if let Some(output) = output {
+            write_new(output, frame.bytes())?
+        } else if *probe {
+            println!("{}", std::str::from_utf8(frame.bytes())?)
+        } else {
+            println!("{}", serde_json::to_string(frame.info())?)
+        }
+        return Ok(());
+    }
     if matches!(args.command, Command::Plugins) {
         for c in &engine.registry().candidates {
             println!("{}", serde_json::to_string_pretty(&c.manifest)?);
@@ -108,10 +192,16 @@ fn main() -> Result<()> {
         | Command::Decode { source, .. }
         | Command::Thumbnail { source, .. }
         | Command::Extract { source, .. } => source,
-        Command::Plugins | Command::Graph { .. } => unreachable!(),
+        Command::Capabilities
+        | Command::Image { .. }
+        | Command::Plugins
+        | Command::Graph { .. } => unreachable!(),
     };
     let mut request = Request::playback(source);
     request.timeout_ms = args.timeout_ms;
+    if args.system_only {
+        request.policy = remdia::ProviderPolicy::SystemOnly;
+    }
     match &args.command {
         Command::Probe { .. } => request.task = Task::Probe,
         Command::Plan { task, .. } => {
@@ -131,12 +221,11 @@ fn main() -> Result<()> {
         Command::Decode { software, .. } => request.hardware = !*software,
         _ => {}
     }
+    let mut session = unsafe { engine.open(request, Cancellation::default()) }?;
     if matches!(args.command, Command::Plan { .. }) {
-        println!("{}", serde_json::to_string_pretty(&engine.plan(&request)?)?);
+        println!("{}", serde_json::to_string_pretty(session.plan())?);
         return Ok(());
     }
-    // The user explicitly selects the installed native capability pack directory.
-    let mut session = unsafe { engine.open(request, Cancellation::default()) }?;
     match args.command {
         Command::Probe { .. } => println!("{}", serde_json::to_string_pretty(session.info())?),
         Command::Decode {
@@ -173,33 +262,18 @@ fn main() -> Result<()> {
                 session.seek(at_us)?;
             }
             let frame = session.read()?.context("no thumbnail frame")?;
-            let FrameInfo::Video {
-                width,
-                height,
-                planes,
-                format,
-                ..
-            } = frame.info()
-            else {
-                anyhow::bail!("expected video")
-            };
-            ensure!(format == "rgba", "thumbnail must be RGBA");
-            let mut rgba = Vec::with_capacity((*width as usize) * (*height as usize) * 4);
-            for row in frame
-                .bytes()
-                .chunks(planes[0].stride)
-                .take(*height as usize)
-            {
-                rgba.extend_from_slice(&row[..*width as usize * 4]);
-            }
-            image::save_buffer_with_format(
-                output,
-                &rgba,
-                *width,
-                *height,
-                image::ColorType::Rgba8,
-                image::ImageFormat::Png,
-            )?;
+            use remdia::image::{Image, ImageInput, ImageOperation, ImageRequest};
+            let image = Image::from_buffer(frame.buffer().clone())?;
+            let request = remdia::MediaRequest::Image(ImageRequest::new(
+                ImageInput::Pixels(image),
+                vec![ImageOperation::new(
+                    "encode",
+                    serde_json::json!({"format":"png"}),
+                )],
+            ));
+            let mut encoder = unsafe { engine.open_job(request, Cancellation::default())? };
+            let encoded = encoder.read()?.context("no encoded thumbnail")?;
+            write_new(&output, encoded.bytes())?;
         }
         Command::Extract {
             output,
@@ -220,5 +294,15 @@ fn main() -> Result<()> {
         }
         _ => {}
     }
+    Ok(())
+}
+
+fn write_new(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(bytes)?;
     Ok(())
 }

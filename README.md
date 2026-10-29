@@ -1,98 +1,102 @@
 # remdia
 
-**不依赖 FFmpeg 的模块化媒体框架。** Rust SDK 和 CLI 使用可组合的 demux / decoder / filter / encoder / mux / sink 插件图，支持 Windows Media Foundation 与 macOS VideoToolbox，供 replayer 共用同一套媒体图。
+不依赖 FFmpeg 的模块化媒体 SDK。音频、视频和图片共用 Engine、Registry、GraphSpec、组件 C ABI 2.2、缓冲所有权、预算、取消与 generation；demux / decoder / filter / encoder / mux / sink 可逐节点组合。
 
-## 架构
+0.3 开发版优先使用 Windows Media Foundation / WIC 和 macOS AudioToolbox / AVFoundation / VideoToolbox / ImageIO / CoreGraphics。核心不链接媒体编解码库或平台框架；系统适配在独立能力包里。
+
+## 系统优先
 
 ```text
-                               ┌→ audio decoder → resample → audio output
-file / HTTP → Rust demux ───────┤
-                               └→ Windows MFT / macOS VideoToolbox decoder → native NV12 → renderer
+本地文件 → 系统 demux ─┬→ 系统 audio.decode → 系统 audio.resample → f32 PCM
+                       └→ 系统 video.decode → CPU NV12 → renderer
+HTTP/渐进源/容器缺口 → compatibility demux → 同样的独立 decoder/filter
 
-file / HTTP → demux → audio decoder → gain → resample → WAV mux → file sink
-                  └→ compressed packet copy → MP3 mux → file sink
+文件/共享字节 → image.decode → scale/crop/alpha/orient/tile/compose → image.encode
+视频解码帧 → native.video.rgba → image.from_video → image.scale → image.encode
 ```
 
-组件通过稳定平台 C ABI v2.1 独立注册和创建。一个图中的节点可以来自不同 DLL；只有输入/输出类型、格式、采样率等约束兼容的连接才允许执行。运行时校验 DAG、逐轨路由、下游优先调度、有界边队列、EOF 排空和 seek generation。没有隐藏的 FFmpeg 回退。
+系统能力按容器、编解码格式、采样率和请求约束选择。损坏输入、取消、I/O 和预算错误直接返回；不会因为系统操作出错而重试软件编解码器。`Request.policy` / `ImageRequest.policy` 可设置 `SystemOnly`，拒绝兼容提供方。显式 GraphSpec 仍允许调用方选择具体组件。
 
-| 能力包 | 独立组件 |
+| 能力包 | 职责与依赖 |
 | --- | --- |
-| `native` | Symphonia demux、音频 decoder、sinc 重采样/混音、音量滤镜、RGBA 缩放、WAV mux、LAME MP3 encoder、压缩 packet 复制、MP3 elementary mux、文件 sink |
-| `windows` | Media Foundation 同步软件视频 decoder，输入压缩 packet，输出 CPU NV12 |
-| `macos` | VideoToolbox 同步完成视频 decoder，硬解 Auto / 软件模式，输出 CPU NV12 |
+| `native` | 自研增益、RGBA 像素转换、简单 WAV/MP3 packet mux、packet copy、file sink；没有第三方媒体算法库 |
+| `system_demux` | `windows.demux` / `macos.demux`，输出压缩包；本地完整文件，包括无正确扩展名的临时文件 |
+| `system_audio` | 系统音频解码、流式重采样/声道矩阵；Windows 另提供独立 MP3 MFT encoder |
+| `windows` / `macos` | 独立视频解码；Windows 同步软件 MFT，macOS VideoToolbox 硬解优先/软件模式 |
+| `image` | WIC 或 ImageIO/CoreGraphics 的 probe/decode/scale/crop/alpha/orient/tile/compose/encode 工厂 |
+| `fallback_demux` | Symphonia 仅用于系统容器缺口及现有 HTTP/Range/渐进 source 适配；不注册音频 decoder |
+| `fallback_mp3_lame` | 仅 macOS，默认系统没有 MP3 encoder；Windows 使用系统 MFT + 独立 gapless mux |
 
-常规音频由 Symphonia 和独立 libopus 提供：MP3、FLAC、WAV/PCM、AAC-LC、ALAC、Vorbis、Opus 等。AC-3、E-AC-3 与多声道 AAC 使用系统解码器：Windows 为 Media Foundation，macOS 为 AudioToolbox，支持路径取决于系统组件是否可用；不附带独立解码器兜底。Rust demux 支持 MP4/MOV、MKV/WebM、Ogg、WAV、FLAC、MP3、AIFF、CAF 的已识别流。Windows 视频首要验收路径是 MP4/MKV 的 H.264；HEVC/VP8/VP9 等取决于系统已安装的 MFT，不能仅凭扩展名承诺可播放。Symphonia 的视频参数支持仍使用其 experimental feature，版本固定在 Cargo.lock。
+已经移除 `image`、`fast_image_resize`、`image-webp`、rubato、libopus 和 libopus adapter 的运行时媒体依赖。Opus 在两端走系统 decoder。WebP 仅使用 WIC / ImageIO；系统未安装匹配 codec 时返回不支持，不携带第三方 WebP 解码器。Windows 的 Vorbis 可随系统扩展变化，运行时查询后再选择。
 
-macOS 支持 macOS 15+ 的 Apple Silicon 与 Intel，H.264 SDR MP4/MKV 已验证；HEVC SDR 取决于系统能力，Main10/HDR/隔行输入明确拒绝。VideoToolbox 使用同步完成模式并按参数集声明的上界重排 B 帧；硬解请求与实际硬解结果分别记录。CPU 平面可跨线程使用，Metal/IOSurface 零拷贝留待后续。
+Symphonia 的 ADTS、MPA、FLAC reader 与 decoder 处于同一上游 crate，兼容 demux 的 Cargo 图仍会出现这些 crate；MPA decoder 功能开关已关闭，AAC/FLAC 仍编译上游 decoder 模块，本包不注册或调用音频 decoder。macOS 的 h264-reader/scuffle-h265 只读取参数集和重排上界，视频像素由 VideoToolbox 解码。[第三方与源代码说明](THIRD_PARTY.md)列出精确边界。
 
-**当前 Windows 视频使用同步软件 MFT。** 暂未接入异步硬件 MFT、D3D surface 共享或 HDR 色调映射；`hardware_decoded` 如实返回 false。该边界优先保证无需 FFmpeg 的组件拆分和播放器接入可验证。
+本地原生 FLAC 使用自有的压缩帧定位层，补齐 Windows Source Reader 返回任意字节块及 macOS 可变块定位的缺口；逐帧 CRC 校验，优先 SEEKTABLE，无表时二分搜索并维护有上限的稀疏索引。解码仍是独立 Windows MFT / AudioToolbox 节点，不引入第三方 codec，也不缓存整段 PCM。
 
-## 构建与运行
+系统路径已覆盖 MP3、AAC、FLAC、ALAC、WAV/常用 PCM、Opus，以及 macOS Vorbis；Dolby 取决于系统安装。不是所有 codec/profile、声道布局或历史格式都已认证。视频首批认证为 SDR 8-bit H.264 MP4/MKV；HEVC/VP8/VP9 依赖平台适配和系统能力，HDR、隔行、异步硬件 MFT 和共享 GPU surface 尚未接入。
 
-Windows x64 需要 Rust stable、Visual Studio C++ Build Tools、CMake 和 Python 3。无需 FFmpeg、libclang、额外编解码 DLL 或 FFmpeg 开发包。
+## 构建与诊断
+
+Windows x64：Rust、Visual Studio C++ Build Tools、Python 3；TLS 依赖的部分构建环境也需要 CMake。macOS 15+ 支持 Apple Silicon 与 Intel，需要 Rust、Apple Command Line Tools、Python 3。
 
 ```powershell
 ./scripts/build-windows.ps1 -Release
-./dist/remdia/remdia.exe plugins
-./dist/remdia/remdia.exe probe 'D:\media\movie.mp4'
-./dist/remdia/remdia.exe decode 'D:\media\movie.mp4' --frames 300
-./dist/remdia/remdia.exe thumbnail 'D:\media\movie.mp4' thumb.png --at-us 1000000
-./dist/remdia/remdia.exe extract 'D:\media\movie.mp4' speech.mp3 --start-us 30000000 --duration-us 30000000
-./dist/remdia/remdia.exe graph examples/audio-to-wav.json
+./dist/remdia/remdia.exe capabilities
+./dist/remdia/remdia.exe plan 'D:\media\movie.mp4'
+./dist/remdia/remdia.exe decode 'D:\media\movie.mp4' --frames 1000
 ```
-
-macOS 需要 Rust、Apple Command Line Tools、CMake 和 Python 3：
 
 ```bash
 ./scripts/build-macos.sh --release
-./dist/remdia/remdia decode tests/fixtures/av.mp4 --frames 1000
+./dist/remdia/remdia capabilities
+./dist/remdia/remdia --system-only plan tests/fixtures/av.mp4
+./dist/remdia/remdia image page.png --width 1200 --output preview.jpg
+./dist/remdia/remdia image page.png --probe
+./dist/remdia/remdia image page.png --plan
+./dist/remdia/remdia graph examples/audio-to-wav-macos.json
 ```
 
-产物按架构发布为 `remdia-macos-aarch64.zip` / `remdia-macos-x86_64.zip`。主程序与插件仅链接系统运行库；无需 FFmpeg 或 Homebrew 编解码动态库。
+`capabilities` 查询实际系统能力；`plan` 打开源并显示实际提供方，`Engine::plan` 则只提供不加载 DLL 的结构计划。CLI 默认在自身目录下发现 `plugins/`，也可使用 `--plugins` 或 `REMDIA_PLUGIN_DIR`。时间参数为整数微秒。Windows 组件静态链接 CRT，包不需要独立 FFmpeg 或 Homebrew codec 动态库。
 
-输出：`dist/remdia-windows-x86_64.zip`。Windows x64 配置静态链接 MSVC 运行库；CLI 和组件 DLL 无需另装 VC Redistributable。`plugins/` 同时包含 `native`、`windows` DLL 及 manifest。CLI 通过自身目录寻找插件，也可用 `--plugins PATH` / `REMDIA_PLUGIN_DIR` 指定。时间参数为整数微秒。
+显式图示例保留兼容 demux，以演示跨能力包组合；默认 facade 优先系统 demux。文件 sink 不覆盖已有目标；WAV mux 在 drain 后修正 RIFF 头。MP3 packet copy/mux 不承诺保留原始 ID3/Xing；gapless 编码请求生成新的延迟/填充标签。Windows 的 `windows.mp3.encode` 是独立的系统原始 MP3 工厂，支持的输入档位以能力查询为准。
 
-`graph` 接受用户定义的 JSON 图，支持串接、逐轨分支、扇出、滤镜顺序调整、绕过 decoder 的压缩流路径。文件 sink 不覆盖已有目标；写到临时文件，mux 排空后发布。WAV mux 在结尾通过带 offset 的输出修正 RIFF 头。MP3 packet mux 输出 elementary stream，重新封装的流不承诺保留原始 ID3/Xing/gapless 信息；MP3 encoder 则写入新的 LAME 延迟/填充标签。
-
-`plan` 是不加载 DLL、不打开文件的结构探测计划；`Session::plan()` 是已探测轨道后实际执行的组件图。SDK 可通过 `Engine::graph()` 执行任意兼容图，不局限于播放场景。
+Windows 的 16 kHz mono gapless 导出使用 MFT 编码和 `native.mp3.gapless_mux` 封装。首轮编码用系统 decoder 校准延迟，缓存成功结果；元数据标记有效样本数并排除首尾填充。macOS 默认公开接口没有 MP3 encoder，因此仅 macOS 保留 LAME。[能力边界与验证方法](docs/system-mp3-encoding.md)。
 
 ## Rust SDK
 
 ```rust,no_run
-use remdia::{Cancellation, Engine, Request};
+use remdia::{Cancellation, Engine, ProviderPolicy, Request};
 # fn main() -> anyhow::Result<()> {
 let engine = Engine::discover("plugins", 256 * 1024 * 1024)?;
-// Native capability packs execute code and must be trusted.
-let mut session = unsafe {
-    engine.open(Request::playback("movie.mp4"), Cancellation::default())?
-};
+let mut request = Request::playback("movie.mp4");
+request.policy = ProviderPolicy::SystemPreferred;
+// Installed component libraries execute native code and must be trusted.
+let mut session = unsafe { engine.open(request, Cancellation::default())? };
 println!("{}", serde_json::to_string_pretty(session.plan())?);
 while let Some(frame) = session.read()? {
-    // FrameInfo describes native planes or f32le PCM. Buffers remain valid
-    // after a session closes, and can be shared with the rendering thread.
     let _ = (frame.info(), frame.plane(0));
 }
 # Ok(()) }
 ```
 
-SDK Session、图和组件留在创建它们的工作线程；只读帧与取消 token 可跨线程。每个节点使用 submit/receive 分离协议；RECONFIGURED 显式通知端口与输出预算变化，宿主复验连接后再获取新格式帧。WOULD_BLOCK 不消费输入。宿主以 retain/release 显式传递输入引用，跨 DLL 不传 Rust allocator 对象。
+图片入口 `MediaRequest::Image` 只生成、执行同一张公共 GraphSpec；没有独立图片执行器。`Engine::graph_with_inputs` 绑定文件、共享编码字节或像素输入。首批像素输出为 CPU RGBA8、straight alpha、sRGB；probe 返回原图尺寸、方向、帧数和格式，decode 归一化方向及色彩，编码支持 PNG/JPEG。
 
-受管理预算覆盖图输出及边队列持有的缓冲、分段 PCM；队列还分别限制数量和媒体时长。预留不足时不会消费输入。跨组件包装可能保守重复计入共享数据，且编解码器内部、系统驱动、临时导出等不属于整个进程 RSS 的硬上限。没有相对 FFmpeg 的性能或包体收益承诺。
+Session/Graph/组件留在创建它们的 worker，只读帧和取消 token 可跨线程。submit/receive 分离，WOULD_BLOCK 不消费输入，RECONFIGURED 在新格式分配前让宿主复验连接与预算。旧 generation 不会作为新结果交付。
+
+受管理预算覆盖图输出、边队列与保留的共享缓冲；它不是整个进程 RSS 上限。系统 codec、框架、驱动和临时内部缓冲需要另测。默认源配置不会暗中先下载整个远程文件，HTTP/Range 继续使用已认证的兼容 source/demux，再连接系统 decoder。
 
 ## 验证
 
-```powershell
+```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo build --workspace --locked
-python scripts/stage.py
-python scripts/fixtures.py
-$env:REMDIA_TEST_PLUGIN_DIR = "$PWD/dist/remdia/plugins"
-$env:REMDIA_TEST_FIXTURES = "$PWD/target/fixtures"
-cargo test --workspace --locked -- --include-ignored
-python scripts/audit-package.py dist/remdia
+python3 scripts/stage.py
+python3 scripts/fixtures.py
+REMDIA_TEST_PLUGIN_DIR="$PWD/dist/remdia/plugins" REMDIA_TEST_FIXTURES="$PWD/target/fixtures" \
+  cargo test --workspace --locked -- --include-ignored
 ```
 
-语料已提交在 `tests/fixtures`，构建和测试均无需外部媒体工具。测试覆盖音频格式、范围裁剪、重采样与 gapless 尾部、MP3、封面、滤镜扇出、WAV finalize、预算、取消，以及 Windows 跨 DLL 的 packet → MFT → NV12 路径。CI 额外用独立 C 宿主检验 ABI，并在移除构建环境 PATH 后运行便携包。Windows x64、macOS aarch64/x86_64 是视频发布目标；Linux 可验证通用音频与图。
+语料已提交，执行构建和测试无需媒体生成程序。测试包括真实 DLL/dylib、独立 C 宿主、可迁移包、逐包解码、系统 codec 缺失、样本数/时间戳、SRC 尾部和声道混合、seek/reset/EOF、取消/预算、图片/旧缓存、扇出及 mux finalize。CI 将系统认证用例放入独立限时进程，以便发现驱动调用停滞。
 
-[架构](docs/architecture.md) · [插件 ABI](docs/plugin-abi.md) · [macOS 设计](docs/macos-integration-design.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [第三方许可](THIRD_PARTY.md)
+[首轮包体/构建/内存测量](docs/system-media-measurements.md) · [架构](docs/architecture.md) · [ABI](docs/plugin-abi.md) · [系统媒体与图片方案](docs/system-media-and-image-design.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [许可](THIRD_PARTY.md)

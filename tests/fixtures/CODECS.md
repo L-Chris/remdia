@@ -18,3 +18,9 @@ integration tests on Windows and on both macOS architectures.
 `av-subtitles.mkv` remuxes the existing synthetic `av.mkv` with two short SRT
 subtitle cues. It exercises filtering of non-audio/video packet tracks during
 playback, EOF and backward seeks; all media is the project's own synthetic corpus.
+
+`audio-alac.m4a` and `audio-vorbis.ogg` encode the existing synthetic 3-second
+`audio.wav` tone with ALAC and Vorbis. Created once with a developer-side encoder;
+normal builds and tests only read the committed bytes. They certify system
+AudioConverter cookie conversion, Vorbis priming and final packet trimming.
+The Vorbis encoder's granule duration is 132352 samples (3.00118 seconds).

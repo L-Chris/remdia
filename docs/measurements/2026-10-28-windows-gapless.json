@@ -1,0 +1,64 @@
+{
+  "runner": "windows-2025",
+  "sdk_commit": "14878e5b934b2d27f59003ff7c290af50d210c7a",
+  "run": "https://github.com/L-Chris/remdia/actions/runs/40787374671",
+  "profile": {
+    "rate": 16000,
+    "channels": 1,
+    "encoder": "Windows Media Foundation",
+    "mux": "native.mp3.gapless_mux",
+    "lame_linked": false
+  },
+  "calibration": {
+    "encoder_delay_samples": 672,
+    "decoder_implicit_trim_samples": 528,
+    "correlation": 0.9786078388205912
+  },
+  "exact_roundtrip_samples": [
+    1,
+    31,
+    575,
+    576,
+    577,
+    1024,
+    17968,
+    32000,
+    32001,
+    1920000
+  ],
+  "signal_roundtrips": [
+    {
+      "samples": 17968,
+      "lag_samples": 0,
+      "correlation": 0.9790278853452059
+    },
+    {
+      "samples": 32000,
+      "lag_samples": 0,
+      "correlation": 0.9801691610389832
+    },
+    {
+      "samples": 32001,
+      "lag_samples": 0,
+      "correlation": 0.9801693416514984
+    },
+    {
+      "samples": 1920000,
+      "lag_samples": 0,
+      "correlation": 0.9801994654074159
+    }
+  ],
+  "macos_interop": {
+    "demuxers": [
+      "macos.demux",
+      "fallback.demux"
+    ],
+    "decoder": "macos.audio.decode",
+    "exact_samples": [
+      1,
+      577,
+      32001
+    ],
+    "zero_offset_correlation": 0.9801694216740646
+  }
+}

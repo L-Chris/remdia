@@ -1,6 +1,8 @@
 # macOS 接入设计草案
 
-状态：首版实现依据。VideoToolbox 同步完成、CPU NV12 与 ABI 2.1 路线已实现；双架构应用迁移按第 7 节验收。
+状态：历史首版设计记录。当前系统 demux / audio / image 与 ABI 2.2 以 [系统媒体与图片方案](system-media-and-image-design.md)、[README](../README.md) 为准；本文后续 ABI 2.2 编号设想已被图片协议使用，异步协议尚未实现。
+
+原首版状态：VideoToolbox 同步完成、CPU NV12 与 ABI 2.1 路线已实现；双架构应用迁移按第 7 节验收。
 
 目标：让 macOS replayer 使用 remdia 的同一套组件图，覆盖播放、seek、缩略图、
 字幕 PCM/MP3、封面与音频校验，构建和运行均不依赖 FFmpeg。

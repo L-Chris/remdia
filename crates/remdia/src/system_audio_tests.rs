@@ -1,0 +1,740 @@
+#![cfg(any(windows, target_os = "macos"))]
+use crate::graph::{Factory, Receive, Submit};
+use crate::registry::TrustedFactory;
+use crate::{
+    BufferHeader, Cancellation, Engine, FrameInfo, GraphEvent, GraphSpec, MediaBuffer, NodeConfig,
+    NodeSpec,
+};
+use serde_json::json;
+
+fn engine() -> Engine {
+    Engine::discover(
+        std::env::var_os("REMDIA_TEST_PLUGIN_DIR").expect("staged system audio plugins"),
+        128 * 1024 * 1024,
+    )
+    .unwrap()
+}
+fn pcm(samples: usize, rate: u32, channels: u16, pts_us: i64, generation: u64) -> MediaBuffer {
+    MediaBuffer::new(
+        BufferHeader {
+            stream_id: 1,
+            generation,
+            info: FrameInfo::Audio {
+                pts_us,
+                rate,
+                channels,
+                samples,
+                format: "f32le".into(),
+            },
+        },
+        vec![
+            (0..samples * channels as usize)
+                .flat_map(|i| ((i as f32 * 0.13).sin() * 0.25).to_le_bytes())
+                .collect(),
+        ],
+    )
+}
+
+#[test]
+#[ignore = "requires staged system audio/demux plugins"]
+fn windows_export_gapless_tags_interoperate_with_system_and_compat_demux() {
+    let engine = engine();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/windows-gapless");
+    for count in [1usize, 577, 32001] {
+        for demux in [
+            format!("{}.demux", std::env::consts::OS),
+            "fallback.demux".into(),
+        ] {
+            let file = root.join(format!("windows-gapless-{count}.mp3"));
+            let mut request = crate::Request::playback(file.to_str().unwrap());
+            request.task = crate::Task::Audio;
+            let config = NodeConfig {
+                component: demux.clone(),
+                settings: serde_json::to_value(&request).unwrap(),
+            };
+            let source = TrustedFactory(engine.registry())
+                .create(&config, Cancellation::default())
+                .unwrap();
+            let media = source.info().media.as_ref().unwrap();
+            assert_eq!(media.duration_us, Some(count as i64 * 1_000_000 / 16000));
+            let track = media.tracks.iter().find(|t| t.kind == "audio").unwrap();
+            let spec = GraphSpec {
+                nodes: vec![
+                    NodeSpec {
+                        id: "demux".into(),
+                        config,
+                    },
+                    NodeSpec {
+                        id: "decode".into(),
+                        config: NodeConfig {
+                            component: format!("{}.audio.decode", std::env::consts::OS),
+                            settings: json!({"track":track}),
+                        },
+                    },
+                ],
+                edges: vec![crate::EdgeSpec::between(
+                    "demux",
+                    "decode",
+                    Some(track.index as u32),
+                )],
+            };
+            let mut graph = unsafe { engine.graph(&spec, Cancellation::default()).unwrap() };
+            let mut pcm = Vec::new();
+            for attempts in 0..10000 {
+                assert!(attempts < 9999, "gapless graph stalled");
+                match graph.poll().unwrap() {
+                    GraphEvent::End => break,
+                    GraphEvent::Pending => {}
+                    GraphEvent::Output { buffer, .. } => {
+                        pcm.extend(
+                            buffer
+                                .bytes()
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|v| f32::from_le_bytes(*v)),
+                        );
+                    }
+                }
+            }
+            assert_eq!(pcm.len(), count, "{demux}: valid sample count");
+            if count == 32001 {
+                let mut state = 0x817a593bu32;
+                let mut filter = 0f32;
+                let input = (0..count)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 17;
+                        state ^= state << 5;
+                        filter = filter * 0.65
+                            + ((state as f64 / u32::MAX as f64 * 2. - 1.) as f32) * 0.35;
+                        filter * 0.6
+                    })
+                    .collect::<Vec<_>>();
+                let reference = &input[512..count - 512];
+                let candidate = &pcm[512..count - 512];
+                let dot = reference
+                    .iter()
+                    .zip(candidate)
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum::<f64>();
+                let a = reference.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                let b = candidate.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                let score = dot / (a * b).sqrt();
+                eprintln!(
+                    "WINDOWS_GAPLESS_INTEROP {} {demux}: samples={count}, correlation={score}",
+                    std::env::consts::OS
+                );
+                assert!(score > 0.85, "{demux}: incorrect sample alignment");
+            }
+        }
+    }
+}
+#[test]
+#[ignore = "requires staged system audio plugins"]
+fn system_src_counts_fractional_tail_and_preserves_reset_generations() {
+    let engine = engine();
+    for source_rate in [16000u32, 44100, 48000] {
+        for target_rate in [16000u32, 48000] {
+            let mut filter = TrustedFactory(engine.registry())
+                .create(
+                    &NodeConfig {
+                        component: format!("{}.audio.resample", std::env::consts::OS),
+                        settings: json!({"rate":target_rate,"channels":2}),
+                    },
+                    Cancellation::default(),
+                )
+                .unwrap();
+            for generation in [1, 2] {
+                let mut submitted = 0usize;
+                let mut emitted = 0usize;
+                let mut energy = 0f64;
+                for length in [1, 31, 1024, 4096, 7] {
+                    let input = pcm(
+                        length,
+                        source_rate,
+                        1,
+                        (submitted as u128 * 1_000_000 / u128::from(source_rate)) as i64,
+                        generation,
+                    );
+                    for attempts in 0..100 {
+                        assert!(attempts < 99, "resampler input stalled");
+                        let accepted = filter.submit(&input).unwrap() == Submit::Accepted;
+                        while let Receive::Output(output) = filter.receive().unwrap() {
+                            if let FrameInfo::Audio {
+                                samples,
+                                pts_us,
+                                rate,
+                                channels,
+                                ..
+                            } = output.header.info
+                            {
+                                assert_eq!(rate, target_rate);
+                                assert_eq!(channels, 2);
+                                assert_eq!(output.header.generation, generation);
+                                assert_eq!(
+                                    pts_us,
+                                    (emitted as u128 * 1_000_000 / u128::from(target_rate)) as i64
+                                );
+                                emitted += samples;
+                                energy += output
+                                    .bytes()
+                                    .as_chunks::<4>()
+                                    .0
+                                    .iter()
+                                    .map(|v| f64::from(f32::from_le_bytes(*v)).powi(2))
+                                    .sum::<f64>();
+                            } else {
+                                panic!("expected audio");
+                            }
+                        }
+                        if accepted {
+                            submitted += length;
+                            break;
+                        }
+                    }
+                }
+                filter.drain().unwrap();
+                for attempts in 0..1000 {
+                    assert!(attempts < 999, "resampler drain stalled");
+                    match filter.receive().unwrap_or_else(|error| {
+                        panic!("SRC {source_rate} -> {target_rate}: {error:#}")
+                    }) {
+                        Receive::Output(output) => {
+                            energy += output
+                                .bytes()
+                                .as_chunks::<4>()
+                                .0
+                                .iter()
+                                .map(|v| f64::from(f32::from_le_bytes(*v)).powi(2))
+                                .sum::<f64>();
+                            if let FrameInfo::Audio {
+                                samples, pts_us, ..
+                            } = output.header.info
+                            {
+                                assert_eq!(output.header.generation, generation);
+                                assert_eq!(
+                                    pts_us,
+                                    (emitted as u128 * 1_000_000 / u128::from(target_rate)) as i64
+                                );
+                                emitted += samples;
+                            } else {
+                                panic!("expected audio");
+                            }
+                        }
+                        Receive::End => break,
+                        _ => panic!("drained resampler requested input"),
+                    }
+                }
+                assert_eq!(
+                    emitted,
+                    (submitted as u128 * u128::from(target_rate)).div_ceil(u128::from(source_rate))
+                        as usize
+                );
+                assert!(
+                    energy > 1.,
+                    "SRC {source_rate} -> {target_rate} lost the signal: {energy}"
+                );
+                filter.reset(generation + 1, 0).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires staged system audio plugins"]
+fn system_src_flushes_before_timestamp_discontinuity() {
+    let engine = engine();
+    let spec = GraphSpec {
+        nodes: vec![
+            NodeSpec {
+                id: "source".into(),
+                config: NodeConfig {
+                    component: "core.buffer.source".into(),
+                    settings: json!({}),
+                },
+            },
+            NodeSpec {
+                id: "src".into(),
+                config: NodeConfig {
+                    component: format!("{}.audio.resample", std::env::consts::OS),
+                    settings: json!({"rate":16000,"channels":1}),
+                },
+            },
+        ],
+        edges: vec![crate::EdgeSpec::between("source", "src", None)],
+    };
+    let mut graph = unsafe {
+        engine
+            .graph_with_inputs(
+                &spec,
+                std::collections::BTreeMap::from([(
+                    "source".into(),
+                    vec![pcm(1024, 44100, 2, 0, 1), pcm(1024, 44100, 2, 2_000_000, 1)],
+                )]),
+                Cancellation::default(),
+            )
+            .unwrap()
+    };
+    let mut first = 0;
+    let mut second = 0;
+    for attempts in 0..10000 {
+        assert!(attempts < 9999, "discontinuous graph stalled");
+        match graph.poll().unwrap() {
+            GraphEvent::End => break,
+            GraphEvent::Pending => {}
+            GraphEvent::Output { buffer, .. } => {
+                let FrameInfo::Audio {
+                    samples, pts_us, ..
+                } = buffer.header.info
+                else {
+                    panic!("expected audio")
+                };
+                if pts_us < 2_000_000 {
+                    first += samples;
+                } else {
+                    second += samples;
+                }
+            }
+        }
+    }
+    assert_eq!(first, 372);
+    assert_eq!(second, 372);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires staged system audio plugins"]
+fn system_decoders_match_the_certified_fixture_timeline() {
+    let engine = engine();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
+    for (name, expected) in [
+        ("audio.mp3", 132300),
+        ("audio.opus", 144000),
+        ("cover.flac", 132300),
+        ("audio.wav", 132300),
+        ("audio-alac.m4a", 132300),
+        ("audio-vorbis.ogg", 132352),
+        ("av.mp4", 145408),
+    ] {
+        let mut request = crate::Request::playback(root.join(name).to_str().unwrap());
+        request.task = crate::Task::Probe;
+        let source = TrustedFactory(engine.registry())
+            .create(
+                &NodeConfig {
+                    component: "fallback.demux".into(),
+                    settings: serde_json::to_value(&request).unwrap(),
+                },
+                Cancellation::default(),
+            )
+            .unwrap();
+        let track = source
+            .info()
+            .media
+            .as_ref()
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|t| t.kind == "audio")
+            .unwrap();
+        let spec = GraphSpec {
+            nodes: vec![
+                NodeSpec {
+                    id: "demux".into(),
+                    config: NodeConfig {
+                        component: "fallback.demux".into(),
+                        settings: serde_json::to_value(&request).unwrap(),
+                    },
+                },
+                NodeSpec {
+                    id: "decode".into(),
+                    config: NodeConfig {
+                        component: "macos.audio.decode".into(),
+                        settings: json!({"track":track}),
+                    },
+                },
+            ],
+            edges: vec![crate::EdgeSpec::between(
+                "demux",
+                "decode",
+                Some(track.index as u32),
+            )],
+        };
+        let mut graph = unsafe { engine.graph(&spec, Cancellation::default()).unwrap() };
+        let mut total = 0;
+        let mut previous: Option<i64> = None;
+        for attempts in 0..10000 {
+            assert!(attempts < 9999, "{name} graph stalled");
+            match graph.poll().unwrap() {
+                GraphEvent::End => break,
+                GraphEvent::Pending => {}
+                GraphEvent::Output { buffer, .. } => {
+                    let FrameInfo::Audio {
+                        samples,
+                        pts_us,
+                        rate,
+                        ..
+                    } = buffer.header.info
+                    else {
+                        panic!("expected PCM")
+                    };
+                    if let Some(end) = previous {
+                        assert!(
+                            (pts_us - end).abs() <= 1,
+                            "{name}: discontinuous PCM at {pts_us} after {end}"
+                        );
+                    } else {
+                        assert_eq!(pts_us, 0, "{name}");
+                    }
+                    previous =
+                        Some(pts_us + (samples as u128 * 1_000_000 / u128::from(rate)) as i64);
+                    total += samples;
+                }
+            }
+        }
+        assert_eq!(total, expected, "{name}");
+    }
+}
+
+#[cfg(windows)]
+fn windows_decode_fixture(name: &str, expected: usize) {
+    let engine = engine();
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures")
+        .join(name);
+    let mut request = crate::Request::playback(source.to_str().unwrap());
+    request.task = crate::Task::Probe;
+    let source = TrustedFactory(engine.registry())
+        .create(
+            &NodeConfig {
+                component: "fallback.demux".into(),
+                settings: serde_json::to_value(&request).unwrap(),
+            },
+            Cancellation::default(),
+        )
+        .unwrap();
+    let track = source
+        .info()
+        .media
+        .as_ref()
+        .unwrap()
+        .tracks
+        .iter()
+        .find(|t| t.kind == "audio")
+        .unwrap();
+    let spec = GraphSpec {
+        nodes: vec![
+            NodeSpec {
+                id: "demux".into(),
+                config: NodeConfig {
+                    component: "fallback.demux".into(),
+                    settings: serde_json::to_value(&request).unwrap(),
+                },
+            },
+            NodeSpec {
+                id: "decode".into(),
+                config: NodeConfig {
+                    component: "windows.audio.decode".into(),
+                    settings: json!({"track":track}),
+                },
+            },
+        ],
+        edges: vec![crate::EdgeSpec::between(
+            "demux",
+            "decode",
+            Some(track.index as u32),
+        )],
+    };
+    let mut graph = match unsafe { engine.graph(&spec, Cancellation::default()) } {
+        Ok(graph) => graph,
+        Err(error)
+            if matches!(name, "audio.opus" | "audio-vorbis.ogg")
+                && format!("{error:#}").contains("no installed synchronous system decoder") =>
+        {
+            eprintln!(
+                "Verified optional system codec unavailable on this installation for {name}: {error:#}"
+            );
+            return;
+        }
+        Err(error) => panic!("{name}: {error:#}"),
+    };
+    let mut total = 0;
+    let mut first = None;
+    let mut last = None;
+    let mut previous: Option<i64> = None;
+    for attempts in 0..10000 {
+        assert!(attempts < 9999, "{name} stalled");
+        match graph.poll().unwrap() {
+            GraphEvent::End => break,
+            GraphEvent::Pending => {}
+            GraphEvent::Output { buffer, .. } => {
+                if let FrameInfo::Audio {
+                    samples,
+                    pts_us,
+                    rate,
+                    ..
+                } = buffer.header.info
+                {
+                    if let Some(end) = previous {
+                        assert!(
+                            (pts_us - end).abs() <= 2,
+                            "{name}: PCM gap at {pts_us} after {end}"
+                        );
+                    } else {
+                        assert_eq!(pts_us, 0, "{name}");
+                    }
+                    previous =
+                        Some(pts_us + (samples as u128 * 1_000_000 / u128::from(rate)) as i64);
+                    total += samples;
+                    first.get_or_insert((samples, pts_us));
+                    last = Some((samples, pts_us));
+                }
+            }
+        }
+    }
+    eprintln!("{name}: total {total}, first {first:?}, last {last:?}");
+    assert_eq!(total, expected, "{name}");
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_mp3_gapless() {
+    windows_decode_fixture("audio.mp3", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_flac_lossless() {
+    windows_decode_fixture("cover.flac", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_alac_lossless() {
+    windows_decode_fixture("audio-alac.m4a", 132300);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_aac() {
+    windows_decode_fixture("av.mp4", 145408);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_wav_pcm() {
+    windows_decode_fixture("audio.wav", 132300);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_system_mp3_encoder_emits_a_decodable_bitstream() {
+    let engine = engine();
+    let capabilities = engine
+        .capability_value(
+            "windows.audio.capabilities",
+            json!({"operation":"encode"}),
+            Cancellation::default(),
+        )
+        .unwrap();
+    eprintln!("SYSTEM_MP3_ENCODER_CAPABILITIES {capabilities}");
+    for rate in [16000, 22050, 24000, 32000, 44100, 48000] {
+        let result = TrustedFactory(engine.registry()).create(
+            &NodeConfig {
+                component: "windows.mp3.encode".into(),
+                settings: json!({"rate":rate,"channels":1}),
+            },
+            Cancellation::default(),
+        );
+        eprintln!(
+            "SYSTEM_MP3_ENCODER_PROFILE rate={rate} accepted={} error={:?}",
+            result.is_ok(),
+            result.as_ref().err().map(|error| format!("{error:#}"))
+        );
+        assert_eq!(
+            result.is_ok(),
+            capabilities["mp3_input_rates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r == rate)
+        );
+    }
+    for rate in [16000u32, 32000] {
+        if !capabilities["mp3_input_rates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == rate)
+        {
+            continue;
+        }
+        let mut encoder = TrustedFactory(engine.registry())
+            .create(
+                &NodeConfig {
+                    component: "windows.mp3.encode".into(),
+                    settings: json!({"rate":rate,"channels":1}),
+                },
+                Cancellation::default(),
+            )
+            .unwrap();
+        let submitted = rate as usize * 2;
+        let input = pcm(submitted, rate, 1, 0, 1);
+        assert_eq!(encoder.submit(&input).unwrap(), Submit::Accepted);
+        encoder.drain().unwrap();
+        let mut bytes = Vec::new();
+        for attempts in 0..1000 {
+            assert!(attempts < 999, "MP3 encoder stalled");
+            match encoder.receive().unwrap() {
+                Receive::End => break,
+                Receive::Output(buffer) => bytes.extend_from_slice(buffer.bytes()),
+                _ => panic!("MP3 encoder requested input after drain"),
+            }
+        }
+        assert!(bytes.len() > 1000);
+        assert!(bytes.windows(2).any(|p| p[0] == 255 && p[1] & 0xe0 == 0xe0));
+        let directory =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/system-tests");
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(format!(
+            "remdia-system-mp3-{}-{rate}.mp3",
+            std::process::id()
+        ));
+        std::fs::write(&path, &bytes).unwrap();
+        let mut request = crate::Request::playback(path.to_str().unwrap());
+        request.task = crate::Task::Audio;
+        request.audio_rate = rate;
+        request.audio_channels = 1;
+        let mut session = unsafe { engine.open(request, Cancellation::default()).unwrap() };
+        assert_eq!(session.info().tracks[0].sample_rate, rate);
+        eprintln!(
+            "SYSTEM_MP3_BITSTREAM rate={rate} track={:?}",
+            session.info().tracks[0]
+        );
+        let mut decoded = 0;
+        while let Some(frame) = session.read().unwrap() {
+            if let FrameInfo::Audio { samples, .. } = frame.info() {
+                decoded += samples;
+            }
+        }
+        drop(session);
+        std::fs::remove_file(path).unwrap();
+        eprintln!(
+            "SYSTEM_MP3_ROUNDTRIP rate={rate} input_samples={submitted} decoded_samples={decoded} difference={}",
+            decoded as i64 - submitted as i64
+        );
+        assert!(decoded >= submitted / 2, "MP3 output lost PCM");
+    }
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_optional_system_opus_or_explicit_absence() {
+    windows_decode_fixture("audio.opus", 144000);
+}
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio plugins"]
+fn windows_optional_system_vorbis_or_explicit_absence() {
+    windows_decode_fixture("audio-vorbis.ogg", 132352);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "requires staged Windows system audio and native mux plugins"]
+fn windows_gapless_mp3_preserves_count_and_signal_alignment_without_lame() {
+    let mut engine = engine();
+    engine
+        .registry
+        .candidates
+        .retain(|c| c.manifest.id != "fallback_mp3_lame" && c.manifest.id != "fallback_vorbis");
+    let root =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/system-tests");
+    std::fs::create_dir_all(&root).unwrap();
+    for count in [1, 31, 575, 576, 577, 1024, 17968, 32000, 32001, 120 * 16000] {
+        let mut state = 0x817a593bu32;
+        let mut filter = 0f32;
+        let signal = (0..count)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                filter = filter * 0.65 + ((state as f64 / u32::MAX as f64 * 2. - 1.) as f32) * 0.35;
+                filter * 0.6
+            })
+            .collect::<Vec<_>>();
+        let encoded = engine
+            .encode_mp3_with_policy(&signal, crate::ProviderPolicy::SystemOnly)
+            .unwrap();
+        let file = root.join(format!("windows-gapless-{count}.mp3"));
+        std::fs::write(&file, encoded.bytes()).unwrap();
+        if count <= 32001 {
+            std::fs::write(
+                root.join(format!("windows-gapless-{count}.f32")),
+                signal
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        }
+        let mut request = crate::Request::playback(file.to_str().unwrap());
+        request.task = crate::Task::Audio;
+        request.audio_rate = 16000;
+        request.audio_channels = 1;
+        request.policy = crate::ProviderPolicy::SystemOnly;
+        let mut session = unsafe { engine.open(request, Cancellation::default()) }.unwrap();
+        assert_eq!(
+            session.info().duration_us,
+            Some(count as i64 * 1_000_000 / 16000)
+        );
+        let mut pcm = Vec::new();
+        while let Some(frame) = session.read().unwrap() {
+            assert!(frame.info().pts_us().unwrap() >= 0);
+            pcm.extend(
+                frame
+                    .bytes()
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|v| f32::from_le_bytes(*v)),
+            );
+        }
+        assert_eq!(pcm.len(), count, "gapless valid samples for {count}");
+        if count >= 17968 {
+            let end = count.min(32768) - 512;
+            let reference = &signal[512..end];
+            let energy = reference.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+            let mut scores = Vec::new();
+            for lag in -16i32..=16 {
+                let start = (512i32 + lag) as usize;
+                let candidate = &pcm[start..start + reference.len()];
+                let dot = reference
+                    .iter()
+                    .zip(candidate)
+                    .map(|(&a, &b)| f64::from(a) * f64::from(b))
+                    .sum::<f64>();
+                let power = candidate.iter().map(|v| f64::from(*v).powi(2)).sum::<f64>();
+                scores.push((lag, dot / (energy * power).sqrt()));
+            }
+            let (lag, score) = scores
+                .into_iter()
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .unwrap();
+            eprintln!(
+                "WINDOWS_GAPLESS samples={count} decoded={} lag={lag} correlation={score}",
+                pcm.len()
+            );
+            assert!(
+                lag.abs() <= 1 && score > 0.85,
+                "incorrect gapless alignment"
+            );
+            let tail = pcm[count - 256..].iter().map(|v| v * v).sum::<f32>();
+            assert!(tail > 0.01, "lost the final signal");
+        }
+    }
+}

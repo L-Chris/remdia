@@ -10,7 +10,6 @@ anyhow.workspace = true
 serde_json.workspace = true
 remdia.workspace = true
 clap = { version = "4", features = ["derive", "env"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
 
 [[bin]]
 name = "remdia"

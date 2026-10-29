@@ -1,19 +1,37 @@
 # replayer integration
 
-Windows replayer now uses remdia's public component graph for playback, metadata/cover extraction, thumbnails, independent subtitle PCM, MP3 encoding and downloaded-audio validation. Its Windows target has no ffmpeg-next dependency. The existing CPAL device callback, playback clock and WGPU conversion shader are retained.
+Windows and macOS use one public remdia component graph for playback, images,
+metadata/artwork, thumbnails, subtitle PCM and MP3 requests. replayer retains
+CPAL output, WGPU rendering, clocks, caching, network source policy and AI work.
 
 | Host subsystem | remdia path |
 | --- | --- |
-| Playback worker | native.demux → native.audio.decode → native.audio.resample; native.demux → windows.video.decode |
-| Frame presentation | Read-only remdia frame planes → WGPU native NV12, with a CPU fallback |
-| Probe / cover | native.demux metadata and artwork command; no decoder created |
-| Thumbnail | native.demux → windows.video.decode → native.video.rgba |
-| Subtitle extraction | Independent mono 16kHz Audio graph; range seek and bounded chunks |
-| MP3 requests | Standalone native.mp3.encode factory; final delay/padding tag patch |
-| QQ / torrent / online music | Application prepares a local file or loopback HTTP URL; remdia handles bounded Range reads |
+| Playback | System demux or source/container compatibility reader → independent system audio/video decoder → system SRC |
+| Rendering | Read-only CPU NV12 planes → application's existing WGPU renderer |
+| Metadata/artwork | Demux metadata/command; no decoder is created |
+| Thumbnail | Video decoder → scalar RGBA conversion → image.from_video → system image.scale |
+| Comics/covers/translations | Shared buffer source → image decoder/filter/tile/compose/encoder components |
+| Subtitle extraction | Independent mono 16-kHz graph, range seek, bounded PCM chunks |
+| Gapless MP3 requests | Shared input source → narrow encoder fallback → final delay/padding tag patch |
+| Online music/torrent/QQ | Application prepares a local file or loopback HTTP source; compatible source/demux preserves interruptible Range and progressive reads, followed by system decode |
 
-A media graph stays on its owning worker. The subtitle scheduler transfers an input/configuration ticket and creates a new graph on the decode thread, rather than moving live component handles. UI cancellation/seek interruption uses a shared token. The host owns pause, volume, clocks, output-device recovery and generation filtering; the backend never opens an audio device or renders a window.
+The application directly imports remdia Image/MediaBuffer rather than image,
+fast_image_resize or a separate replayer-image crate. GUI framework clipboard and
+icon internals still depend on image transitively; this is not a zero-image-crate
+claim for the application's full dependency graph.
 
-The replayer Windows package must include both native/windows DLLs and manifests under plugins, using a pinned remdia revision. Existing macOS releases retain their old backend until a native video pack is implemented there; remdia itself has no FFmpeg dependencies on any target. The remdia-media feature enables the portable integration path for audio/host validation on other development machines.
+Graphs and components stay on their creating worker. Frames and cancellation
+controls cross threads; subtitle workers open their own graph from an input
+configuration ticket. Pause, device recovery, clocks and generation filtering
+remain application responsibilities.
 
-The initial Windows certification target is H.264 MP4/MKV plus common music formats. System-codec absence, unsupported video codecs, hardware acceleration and unusual container variants remain explicit limitations, not silent fallback to FFmpeg. Full historical format parity with replayer's old FFmpeg build is not claimed.
+Package the exact pinned SDK revision, all platform manifests/libraries and its
+notices. macOS uses native, macos, image, system_audio, system_demux,
+fallback_demux and fallback_mp3_lame. Windows uses native, windows, image,
+system_audio, system_demux, fallback_demux, fallback_mp3_lame and fallback_vorbis. Each compatibility component is selected only for its declared
+source/format/profile gap. System failures do not trigger generic codec retries.
+
+Certification targets Windows x64 and macOS 15+ arm64/x86_64, common music and
+SDR H.264 MP4/MKV, PNG image caches and WebP caches where a system codec is installed, seek/reset/EOF, progressive reads
+and relocated packages. Historical FFmpeg format parity, HDR, shared GPU
+surfaces and every legacy audio profile are not claimed.

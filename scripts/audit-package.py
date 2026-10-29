@@ -12,9 +12,14 @@ root = Path(__file__).resolve().parent.parent
 names = re.findall(r'^name = "([^"]+)"$', (root / 'Cargo.lock').read_text(), re.M)
 for name in names:
     assert 'ffmpeg' not in name.lower(), name
+    assert name not in ('image-webp', 'symphonia-codec-vorbis'), name
 files = list(Path(a.directory).rglob('*'))
+windows_package = any(path.suffix.lower() in ('.exe', '.dll') for path in files)
+if windows_package:
+    tree = subprocess.check_output(['cargo', 'tree', '--workspace', '--target', 'x86_64-pc-windows-msvc', '-e', 'normal', '--prefix', 'none', '--locked'], text=True)
+    assert not re.search(r'^(mp3lame-(encoder|sys)|symphonia-codec-vorbis) ', tree, re.M), 'Windows must not compile LAME or software Vorbis'
 for path in files:
-    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale)', path.name, re.I), path
+    assert not re.search(r'(ffmpeg|avcodec|avformat|avutil|swresample|swscale|image[_-]webp)', path.name, re.I), path
 def imports(path):
     data = path.read_bytes()
     def u16(n): return struct.unpack_from('<H', data, n)[0]
@@ -45,6 +50,9 @@ def imports(path):
     return result
 
 for path in files:
+    assert not re.search(r'fallback_vorbis', path.name, re.I), path
+    if windows_package:
+        assert not re.search(r'(fallback_mp3_lame|LAME-COPYING|mp3lame-encoder-LGPL)', path.name, re.I), path
     if path.suffix.lower() in ('.dll', '.exe'):
         linked = imports(path)
         assert not any(re.search(r'(avcodec|avformat|avutil|swresample|swscale|vcruntime|msvcp|msvcr\d)', item, re.I) for item in linked), (path, linked)

@@ -1,0 +1,31 @@
+{
+  "label": "baseline-pcm600-2",
+  "command": [
+    "target/system-benchmark/baseline-runtime/remdia",
+    "decode",
+    "target/system-benchmark/pcm600.wav",
+    "--frames",
+    "100000",
+    "--software"
+  ],
+  "cwd": "<checkout>",
+  "sample_interval_seconds": 0.05,
+  "platform": "macOS-27.0-arm64-arm-64bit",
+  "memory_limit_bytes": 6442450944,
+  "peak_tree_rss_bytes": 13991936,
+  "peak_tree_footprint_bytes": 4391776,
+  "peak_tree_processes": 2,
+  "aborted": null,
+  "swap_before_bytes": 340325826,
+  "swap_peak_bytes": 340325826,
+  "wall_seconds": 1.726906459,
+  "exit_code": 0,
+  "idle_rss_bytes": 0,
+  "idle_footprint_bytes": 0,
+  "idle_process_count": 0,
+  "swap_after_bytes": 340325826,
+  "log_file": "<checkout>/target/system-benchmark/baseline-pcm-2.log",
+  "time_file": "<checkout>/target/system-benchmark/baseline-pcm-2.time",
+  "monitor_errors": [],
+  "foreground_max_single_process_rss_bytes": 12746752
+}

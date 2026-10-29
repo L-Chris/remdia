@@ -1,0 +1,28 @@
+[package]
+name = "remdia-backend-fallback-demux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+remdia-graph.workspace = true
+remdia-plugin-abi.workspace = true
+# Explicit reader imports; no default codec registry or standalone Vorbis decoder.
+# AAC/FLAC readers still compile upstream decoder modules. MPA is demux-only.
+symphonia-core = { version = "0.6.1", features = ["exp-video-codecs"] }
+symphonia-metadata = { version = "0.6.1", default-features = false, features = ["ape", "id3v1", "id3v2"] }
+symphonia-format-caf = "0.6.1"
+symphonia-format-isomp4 = "0.6.1"
+symphonia-format-mkv = "0.6.1"
+symphonia-format-ogg = "0.6.1"
+symphonia-format-riff = { version = "0.6.1", default-features = false, features = ["aiff", "wav"] }
+symphonia-codec-aac = "0.6.1"
+symphonia-bundle-flac = "0.6.1"
+symphonia-bundle-mp3 = { version = "0.6.1", default-features = false }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }

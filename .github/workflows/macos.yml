@@ -48,9 +48,10 @@ jobs:
           python3 scripts/fixtures.py
           export REMDIA_TEST_PLUGIN_DIR="$PWD/dist/remdia/plugins"
           export REMDIA_TEST_FIXTURES="$PWD/target/fixtures"
-          cargo test --workspace --locked -- --include-ignored
+          python3 scripts/test-system-components.py
+          cargo test --workspace --locked -- --include-ignored --skip system_audio_tests:: --skip system_demux_tests::
           clang -std=c11 -Wall -Wextra -Werror -Iinclude tests/abi-smoke.c -o target/abi-smoke
-          ./target/abi-smoke "$PWD/dist/remdia/plugins/libremdia_backend_native.dylib" "$PWD/target/fixtures/probe.json"
+          ./target/abi-smoke "$PWD/dist/remdia/plugins/libremdia_backend_fallback_demux.dylib" "$PWD/target/fixtures/probe.json"
           python3 scripts/network-smoke.py --exe dist/remdia/remdia --fixtures target/fixtures
       - name: Relocated CLI with system-only PATH
         run: |

@@ -1,7 +1,7 @@
 //! Component C ABI v2: factories plus independent submit/receive/drain/reset.
 use std::ffi::c_void;
 pub const ABI_MAJOR: u16 = 2;
-pub const ABI_MINOR: u16 = 1;
+pub const ABI_MINOR: u16 = 2;
 pub const OK: i32 = 0;
 pub const EOF: i32 = 1;
 pub const NEED_INPUT: i32 = 2;
