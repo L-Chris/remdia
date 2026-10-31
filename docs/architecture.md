@@ -3,7 +3,7 @@
 The project has no FFmpeg build, runtime, command-line or codec dependency. The old fused session backend has been removed.
 
 ```text
-remdia-cli / replayer -> remdia playback facade / public Engine::graph
+remdia-cli / Pordo -> remdia playback facade / public Engine::graph
                       -> remdia-graph: typed buffers, ports, DAG scheduler
                       -> remdia-buffer: shared resource ledger
                       -> remdia-plugin-abi: versioned platform C ABI v2

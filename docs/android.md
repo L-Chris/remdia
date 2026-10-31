@@ -42,7 +42,7 @@ python3 scripts/audit-android.py --aar dist/android/remdia-0.3.0-system-only.aar
 python3 scripts/build-android.py --abi arm64-v8a
 ```
 
-输出为 `dist/android/*.aar`、大小/耗时/SHA-256 报告及 `SHA256SUMS.txt`。AAR 含 Java facade、R8 保留规则、每 ABI 的可信插件清单和 `.so`，原生库以 16 KB LOAD alignment 链接。最终 APK/AAB 的压缩、对齐、ABI 拆分仍由应用构建决定；AAR 大小不等于 replayer 安装包增量。应用构建参考 [Android 官方 16 KB 打包要求](https://developer.android.com/guide/practices/page-sizes#packaging)，未压缩原生库使用 AGP 8.5.1 或更高版本。
+输出为 `dist/android/*.aar`、大小/耗时/SHA-256 报告及 `SHA256SUMS.txt`。AAR 含 Java facade、R8 保留规则、每 ABI 的可信插件清单和 `.so`，原生库以 16 KB LOAD alignment 链接。最终 APK/AAB 的压缩、对齐、ABI 拆分仍由应用构建决定；AAR 大小不等于 Pordo 安装包增量。应用构建参考 [Android 官方 16 KB 打包要求](https://developer.android.com/guide/practices/page-sizes#packaging)，未压缩原生库使用 AGP 8.5.1 或更高版本。
 
 应用设置 `minSdk = 28`，把 AAR 放到 `app/libs` 后：
 

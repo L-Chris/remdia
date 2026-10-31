@@ -1,7 +1,7 @@
-# replayer integration
+# Pordo integration
 
 Windows and macOS use one public remdia component graph for playback, images,
-metadata/artwork, thumbnails, subtitle PCM and MP3 requests. replayer retains
+metadata/artwork, thumbnails, subtitle PCM and MP3 requests. Pordo retains
 CPAL output, WGPU rendering, clocks, caching, network source policy and AI work.
 
 | Host subsystem | remdia path |
@@ -16,7 +16,7 @@ CPAL output, WGPU rendering, clocks, caching, network source policy and AI work.
 | Online music/torrent/QQ | Application prepares a local file or loopback HTTP source; compatible source/demux preserves interruptible Range and progressive reads, followed by system decode |
 
 The application directly imports remdia Image/MediaBuffer rather than image,
-fast_image_resize or a separate replayer-image crate. GUI framework clipboard and
+fast_image_resize or a separate application image crate. GUI framework clipboard and
 icon internals still depend on image transitively; this is not a zero-image-crate
 claim for the application's full dependency graph.
 

@@ -28,7 +28,7 @@ let engine = remdia::Engine::bundled_with_plugins("plugins", 256 * 1024 * 1024)?
 | `bundled` | 上述两组；在 Android 不编译桌面兼容 demux |
 | `builtin-src` | 仅 Android 的可选 standalone SRC |
 
-macOS LAME 保持独立 dylib，未加入 builtin 依赖。replayer 使用 `bundled`，在自己的 Cargo 依赖图内统一链接，HTTP/TLS 等已有依赖也可共同去重。Windows 应用包不需要 remdia DLL；macOS 应用包只额外带 LAME 扩展与对应清单。
+macOS LAME 保持独立 dylib，未加入 builtin 依赖。Pordo 使用 `bundled`，在自己的 Cargo 依赖图内统一链接，HTTP/TLS 等已有依赖也可共同去重。Windows 应用包不需要 remdia DLL；macOS 应用包只额外带 LAME 扩展与对应清单。
 
 ## 独立单库 SDK
 
