@@ -8,7 +8,7 @@ version = "0.3.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.89"
-repository = "https://github.com/L-Chris/remdia"
+repository = "https://github.com/PordoTech/remdia"
 
 [workspace.dependencies]
 anyhow = "1"
