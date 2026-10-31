@@ -99,4 +99,4 @@ REMDIA_TEST_PLUGIN_DIR="$PWD/dist/remdia/plugins" REMDIA_TEST_FIXTURES="$PWD/tar
 
 语料已提交，执行构建和测试无需媒体生成程序。测试包括真实 DLL/dylib、独立 C 宿主、可迁移包、逐包解码、系统 codec 缺失、样本数/时间戳、SRC 尾部和声道混合、seek/reset/EOF、取消/预算、图片/旧缓存、扇出及 mux finalize。CI 将系统认证用例放入独立限时进程，以便发现驱动调用停滞。
 
-[首轮包体/构建/内存测量](docs/system-media-measurements.md) · [架构](docs/architecture.md) · [ABI](docs/plugin-abi.md) · [系统媒体与图片方案](docs/system-media-and-image-design.md) · [replayer 接入](docs/replayer-scope.md) · [原始架构提案](docs/remedia.md) · [许可](THIRD_PARTY.md)
+[首轮包体/构建/内存测量](docs/system-media-measurements.md) · [架构](docs/architecture.md) · [ABI](docs/plugin-abi.md) · [系统媒体与图片方案](docs/system-media-and-image-design.md) · [Pordo 接入](docs/pordo-scope.md) · [原始架构提案](docs/remedia.md) · [许可](THIRD_PARTY.md)
